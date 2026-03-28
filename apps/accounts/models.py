@@ -18,6 +18,21 @@ class Profile(models.Model):
         on_delete=models.CASCADE,
         related_name="profile",
     )
+    
+     # Personal Details
+    phone_number = models.CharField(max_length=20, blank=True, default="")
+    profile_image = models.ImageField(upload_to="profiles/", null=True, blank=True)
+    
+     #professional details
+    school_district = models.CharField(max_length=255, blank=True, default="")
+    specialization  = models.CharField(max_length=255, blank=True, default="")
+    years_of_experience = models.CharField(max_length=50, blank=True, default="")
+    
+    #forget password 
+    otp_code = models.CharField(max_length=6, blank=True, null=True)
+    otp_created_at = models.DateTimeField(null=True, blank=True)
+
+    # --- Subscription & Stripe ---
     subscription_status = models.CharField(
         max_length=20,
         choices=SubscriptionStatus.choices,
@@ -26,6 +41,8 @@ class Profile(models.Model):
     )
     stripe_customer_id     = models.CharField(max_length=120, blank=True, null=True, unique=True)
     stripe_subscription_id = models.CharField(max_length=120, blank=True, null=True, unique=True)
+    
+    # Metadata
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

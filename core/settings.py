@@ -13,7 +13,7 @@ sys.path.insert(0, os.path.join(BASE_DIR, 'apps'))
 
 SECRET_KEY = 'django-insecure-l$23+bj#atv=b5h^)8n@a$u=-pdb_%et5=@rfvd8mbknqd$-#1'
 DEBUG = True
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
     'django.contrib.admin',
@@ -30,7 +30,7 @@ INSTALLED_APPS = [
     'corsheaders',
 
     # Local Apps
-    'accounts',
+    'apps.accounts',
 ]
 
 # ── REST FRAMEWORK CONFIG ─────────────────────────────────────────────────────
