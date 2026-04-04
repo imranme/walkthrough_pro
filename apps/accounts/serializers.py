@@ -90,12 +90,20 @@ class ChangePasswordSerializer(serializers.Serializer):
     new_password = serializers.CharField(required=True, min_length=8)
     confirm_new_password = serializers.CharField(required=True)
 
-    def validate(self, data):
-        if data['new_password'] != data['confirm_new_password']:
-            raise serializers.ValidationError({"confirm_new_password": "New passwords do not match."})
-        
+    def validate_current_password(self, value):
         user = self.context['request'].user
-        if not user.check_password(data['current_password']):
-            raise serializers.ValidationError({"current_password": "Wrong current password."})
+        # Django-r build-in check_password function bebohar kora hoyeche
+        if not user.check_password(value):
+            raise serializers.ValidationError("Puraton password-ti match korche na।")
+        return value
+
+    def validate(self, data):
+        # New password matching check
+        if data['new_password'] != data['confirm_new_password']:
+            raise serializers.ValidationError({"confirm_new_password": "Notun password duti milche na।"})
         
+        # New password jate old password-er moto na hoy (Optional kintu bhalo practice)
+        if data['current_password'] == data['new_password']:
+            raise serializers.ValidationError({"new_password": "Notun password puraton password theke alada hote hobe।"})
+            
         return data

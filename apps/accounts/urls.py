@@ -8,18 +8,20 @@ from rest_framework_simplejwt.views import (
 # Tomar nijer toiri kora views (Ekhan theke LogoutView import hobe)
 from .views import (
     RegisterView, 
+    LoginView,
     MeView, 
     ForgotPasswordView, 
     ResetPasswordView, 
     ChangePasswordView, 
     DeleteAccountView,
-    LogoutView  # << Eita ekhane thakbe
+    LogoutView  
 )
 
 urlpatterns = [
     # Auth
     path("register/", RegisterView.as_view(), name="register"),
-    path("login/", TokenObtainPairView.as_view(), name="login"),
+    # path("login/", TokenObtainPairView.as_view(), name="login"),
+    path("login/", LoginView.as_view(), name="login"),
     path("token/refresh/", TokenRefreshView.as_view(), name="token_refresh"),
     path("logout/", LogoutView.as_view(), name="logout"), # Ekhon eita kaj korbe
 
