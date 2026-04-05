@@ -1,5 +1,6 @@
 from rest_framework import serializers
 from .models import Observation, Teacher
+from django.contrib.auth.models import User
 
 class TeacherSerializer(serializers.ModelSerializer):
     observation_count = serializers.SerializerMethodField()
@@ -13,9 +14,9 @@ class TeacherSerializer(serializers.ModelSerializer):
         return obj.observations.count()
 
     def get_avg_score(self, obj):
-        # Ekhane amra rating ke numerical score e convert kori (e.g. Distinguished = 4)
-        observations = obj.observations.all()
-        if not observations.exists(): return 0
+        if not observations.exists(): 
+            return 0
+
         # Simple Logic: mapping rating strings to numbers
         mapping = {'distinguished': 4, 'accomplished': 3, 'proficient': 2, 'developing': 1, 'improvement_needed': 0}
         scores = [mapping.get(o.rating, 2) for o in observations]
