@@ -4,4 +4,5 @@ from django.urls import path, include
 urlpatterns = [
     path('admin/', admin.site.urls),
     path('api/v1/auth/', include('accounts.urls')), # Ekhane 'accounts.urls' thakte hobe
+    path('api/v1/', include('apps.observations.urls')),
 ]
