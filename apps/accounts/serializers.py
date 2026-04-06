@@ -1,3 +1,4 @@
+import random
 from django.contrib.auth.models import User
 from rest_framework import serializers
 from .models import Profile
@@ -22,11 +23,11 @@ class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
         fields = (
-            "id", "username", "email", "first_name", "last_name", 
+            "id", "email", "first_name", "last_name", 
             "phone_number", "school_district", "specialization", 
             "years_of_experience", "profile_image", "subscription_status", "is_pro"
         )
-        read_only_fields = ("id", "username", "email") # Email/Username edit kora risky, tai bondho rakha bhalo
+        read_only_fields = ("id",  "email") 
 
     def update(self, instance, validated_data):
         # Profile data pop kora (Nested Write)
@@ -47,8 +48,7 @@ class UserSerializer(serializers.ModelSerializer):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# 2. Registration Serializer (Screen 2)
-# ══════════════════════════════════════════════════════════════════════════════
+# 2. Registration Serializer (For Register API)     
 
 class RegisterSerializer(serializers.ModelSerializer):
     password  = serializers.CharField(write_only=True, min_length=8)
@@ -57,29 +57,49 @@ class RegisterSerializer(serializers.ModelSerializer):
     
     class Meta:
         model  = User
-        fields = ("id", "username", "email", "first_name", "last_name", "phone_number", "password", "password2")
+        # Username field-ti bad deya hoyeche request theke
+        fields = ("id", "email", "first_name", "last_name", "phone_number", "password", "password2")
 
     def validate(self, attrs):
+        # 1. Password match check
         if attrs["password"] != attrs.pop("password2"):
             raise serializers.ValidationError({"password2": "Passwords do not match."})
+        
+        # 2. Email unique check
+        if User.objects.filter(email=attrs["email"]).exists():
+            raise serializers.ValidationError({"email": "Email is already in use."})
+        
         return attrs
 
     def create(self, validated_data):
-        phone_number = validated_data.pop('phone_number', None)
+        email = validated_data["email"]
+        
+        # 3. Auto-generate Username logic
+        base_username = email.split('@')
+        username = base_username
+        
+        # Jodi username age theke thake, tobe random number add kora
+        counter = 1
+        while User.objects.filter(username=username).exists():
+            username = f"{base_username}{random.randint(10, 999)}"
+            counter += 1
+
+        # 4. User Create logic (Username auto set hobe)
         user = User.objects.create_user(
-            username=validated_data["username"],
-            email=validated_data.get("email", ""), 
+            username=username, 
+            email=email, 
             password=validated_data["password"],
             first_name=validated_data.get("first_name", ""),
             last_name=validated_data.get("last_name", ""),
         )
 
+        # 5. Profile update (phone number)
+        phone_number = validated_data.pop('phone_number', None)
         if phone_number:
             user.profile.phone_number = phone_number
             user.profile.save()
             
         return user
-
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. Change Password Serializer (Settings Screen)

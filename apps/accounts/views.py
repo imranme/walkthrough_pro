@@ -74,29 +74,96 @@ class ForgotPasswordView(APIView):
             return Response({"message": "OTP sent successfully."}, status=200)
         return Response({"error": "User not found."}, status=404)
 
-class ResetPasswordView(APIView):
-    """Screen 4 & 5: Verify OTP and Set New Password"""
+# 1. Verify OTP View (Step 2)
+class VerifyOTPView(APIView):
+    """Screen: Submit OTP!"""
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         email = request.data.get('email')
         otp = request.data.get('otp')
-        new_password = request.data.get('password')
-        confirm_password = request.data.get('confirm_password')
         
-        if new_password != confirm_password:
+        user = User.objects.filter(email=email).first()
+        if user and str(user.profile.otp_code) == str(otp):
+            # OTP match korle success message
+            return Response({"message": "OTP verified. You can now reset your password."}, status=200)
+        
+        return Response({"error": "Invalid OTP."}, status=status.HTTP_400_BAD_REQUEST)
+
+class ResendOTPView(APIView):
+    """Figma Screen: Submit OTP! -> Resend OTP Button"""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email')
+        user = User.objects.filter(email=email).first()
+
+        if user:
+            # 1. Notun OTP code
+            new_otp = str(random.randint(100000, 999999))
+            
+            # 2. Database update
+            user.profile.otp_code = new_otp
+            user.profile.otp_created_at = timezone.now()
+            user.profile.save()
+
+            # 3. Email pathano (Debug print for now)
+            print(f"RESENT OTP for {email}: {new_otp}")
+            
+            return Response({"message": "A new OTP has been sent to your email."}, status=200)
+        
+        return Response({"error": "User not found."}, status=404)
+
+# 2. Reset Password View (Step 3)
+class ResetPasswordView(APIView):
+    """Screen: Reset Password?"""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email')
+        password = request.data.get('password')
+        confirm_password = request.data.get('confirm_password')
+
+        if password != confirm_password:
             return Response({"error": "Passwords do not match."}, status=400)
 
         user = User.objects.filter(email=email).first()
-        # String comparison nishchit kora
-        if user and str(user.profile.otp_code) == str(otp):
-            user.set_password(new_password)
+        if user:
+            user.set_password(password)
             user.save()
+            
+            # OTP code clean kora jate bar bar bebohar na hoy
             user.profile.otp_code = None
             user.profile.save()
             return Response({"message": "Password reset successful."}, status=200)
         
-        return Response({"error": "Invalid OTP or Email."}, status=400)
+        return Response({"error": "User not found."}, status=404)
+
+
+
+# class ResetPasswordView(APIView):
+#     """Screen 4 & 5: Verify OTP and Set New Password"""
+#     permission_classes = [permissions.AllowAny]
+
+#     def post(self, request):
+#         email = request.data.get('email')
+#         otp = request.data.get('otp')
+#         new_password = request.data.get('password')
+#         confirm_password = request.data.get('confirm_password')
+        
+#         if new_password != confirm_password:
+#             return Response({"error": "Passwords do not match."}, status=400)
+
+#         user = User.objects.filter(email=email).first()
+#         # String comparison nishchit kora
+#         if user and str(user.profile.otp_code) == str(otp):
+#             user.set_password(new_password)
+#             user.save()
+#             user.profile.otp_code = None
+#             user.profile.save()
+#             return Response({"message": "Password reset successful."}, status=200)
+        
+#         return Response({"error": "Invalid OTP or Email."}, status=400)
 
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. PROFILE & SETTINGS
