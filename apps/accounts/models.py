@@ -20,7 +20,7 @@ class Profile(models.Model):
     )
     
      # Personal Details
-    phone_number = models.CharField(max_length=20, blank=True, default="")
+    phone_number = models.CharField(max_length=15, blank=True, null=True)
     profile_image = models.ImageField(upload_to="profiles/", null=True, blank=True)
     
      #professional details
