@@ -24,42 +24,79 @@ class TeacherListCreateView(generics.ListCreateAPIView):
         serializer.save(created_by=self.request.user)
 
 
+# class ObservationListCreateView(generics.ListCreateAPIView):
+#     """
+#     Handles Observation creation and listing with detailed response.
+#     """
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def get_serializer_class(self):
+#         # Validation er jonno CreateSerializer, data show korar jonno ReadSerializer
+#         return ObservationCreateSerializer if self.request.method == "POST" else ObservationReadSerializer
+
+#     def get_queryset(self):
+#         # select_related('teacher') optimizes the query for teacher details
+#         return Observation.objects.filter(created_by=self.request.user).select_related("teacher")
+
+#     def perform_create(self, serializer):
+#         # Save observation and link it to the logged-in user
+#         return serializer.save(created_by=self.request.user)
+
+#     def create(self, request, *args, **kwargs):
+#         """
+#         Overriding create to return detailed ObservationReadSerializer data 
+#         immediately after a successful POST request.
+#         """
+#         serializer = self.get_serializer(data=request.data)
+#         serializer.is_valid(raise_exception=True)
+        
+#         # KEY FIX: Saving to an instance variable to avoid 'KeyError: id'
+#         instance = self.perform_create(serializer)
+        
+#         # Return full details (Teacher name, Grade level, Subject, Formatted Date/Time)
+#         full_serializer = ObservationReadSerializer(instance)
+        
+#         headers = self.get_success_headers(serializer.data)
+#         return Response(full_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
+
 class ObservationListCreateView(generics.ListCreateAPIView):
-    """
-    Handles Observation creation and listing with detailed response.
-    """
     permission_classes = [permissions.IsAuthenticated]
 
     def get_serializer_class(self):
-        # Validation er jonno CreateSerializer, data show korar jonno ReadSerializer
         return ObservationCreateSerializer if self.request.method == "POST" else ObservationReadSerializer
 
     def get_queryset(self):
-        # select_related('teacher') optimizes the query for teacher details
         return Observation.objects.filter(created_by=self.request.user).select_related("teacher")
 
     def perform_create(self, serializer):
-        # Save observation and link it to the logged-in user
         return serializer.save(created_by=self.request.user)
 
+    # GET Request এর জন্য Custom List (Summary-সহ)
+    def list(self, request, *args, **kwargs):
+        queryset = self.get_queryset()
+        serializer = self.get_serializer(queryset, many=True)
+        
+        # Summary Calculation
+        total = queryset.count()
+        avg = queryset.aggregate(Avg('overall_performance_score'))['overall_performance_score__avg']
+        
+        return Response({
+            "results": serializer.data,
+            "summary": {
+                "total_observations": total,
+                "average_score": round(avg, 1) if avg else 0.0
+            }
+        })
+
+    # POST Request এর পর Full Data দেখানোর জন্য
     def create(self, request, *args, **kwargs):
-        """
-        Overriding create to return detailed ObservationReadSerializer data 
-        immediately after a successful POST request.
-        """
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-        
-        # KEY FIX: Saving to an instance variable to avoid 'KeyError: id'
         instance = self.perform_create(serializer)
-        
-        # Return full details (Teacher name, Grade level, Subject, Formatted Date/Time)
         full_serializer = ObservationReadSerializer(instance)
+        return Response(full_serializer.data, status=status.HTTP_201_CREATED)
+
         
-        headers = self.get_success_headers(serializer.data)
-        return Response(full_serializer.data, status=status.HTTP_201_CREATED, headers=headers)
-
-
 class DashboardStatsView(APIView):
     """
     Provides statistics for the Dashboard cards (This Month, Total Teachers, Avg Score).
