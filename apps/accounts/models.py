@@ -21,7 +21,12 @@ class Profile(models.Model):
     
      # Personal Details
     phone_number = models.CharField(max_length=15, blank=True, null=True)
-    profile_image = models.ImageField(upload_to="profiles/", null=True, blank=True)
+    profile_image = models.ImageField(
+    upload_to="profile_images/",  
+    null=True, 
+    blank=True,
+    help_text="Profile photo — 'Click camera icon to change photo'",
+)
     
      #professional details
     school_district = models.CharField(max_length=255, blank=True, default="")

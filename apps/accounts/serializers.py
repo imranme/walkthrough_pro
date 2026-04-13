@@ -14,8 +14,7 @@ class UserSerializer(serializers.ModelSerializer):
     school_district = serializers.CharField(source="profile.school_district", required=False, allow_blank=True)
     specialization = serializers.CharField(source="profile.specialization", required=False, allow_blank=True)
     years_of_experience = serializers.CharField(source="profile.years_of_experience", required=False, allow_blank=True)
-    profile_image = serializers.ImageField(source="profile.profile_image", read_only=True)
-    
+    profile_image = serializers.ImageField(source="profile.profile_image", required=False, allow_null=True)    
     # Subscription status (Read Only)
     subscription_status = serializers.CharField(source="profile.subscription_status", read_only=True)
     is_pro = serializers.BooleanField(source="profile.is_pro", read_only=True)
