@@ -32,6 +32,7 @@ INSTALLED_APPS = [
     # Local Apps
     'apps.accounts',
     'apps.observations',
+    'apps.community',
 ]
 
 # ── REST FRAMEWORK CONFIG ─────────────────────────────────────────────────────
