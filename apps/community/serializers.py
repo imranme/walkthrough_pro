@@ -14,8 +14,10 @@ class AuthorSerializer(serializers.ModelSerializer):
 
     def get_initials(self, obj):
         if obj.first_name and obj.last_name:
-            return f"{obj.first_name}{obj.last_name}".upper()
-        return obj.username[:2].upper()
+            f = str(obj.first_name)
+            l = str(obj.last_name)
+            return (f + l).upper()
+     
 
 class ReplySerializer(serializers.ModelSerializer):
     author = AuthorSerializer(source="user", read_only=True)
@@ -39,8 +41,11 @@ class DiscussionListSerializer(serializers.ModelSerializer):
         model = Discussion
         fields = ["id", "title", "body", "category", "view_count", "reply_count", "is_answered", "author", "time_since"]
 
+    # def get_time_since(self, obj):
+    #     return f"{timesince(obj.created_at).split(',')} ago"
     def get_time_since(self, obj):
-        return f"{timesince(obj.created_at).split(',')} ago"
+        delta = timesince(obj.created_at).split(',')[0]
+        return f"{delta} ago"
     
     def get_reply_count(self, obj):
         return obj.answers.count() + Reply.objects.filter(answer__discussion=obj).count()

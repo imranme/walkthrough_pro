@@ -33,5 +33,5 @@ urlpatterns = [
 
     # --- Replies ---
     # POST /api/community/answers/{answer_id}/replies/
-    path("answers/<int:answer_id>/replies/", ReplyCreateView.as_view(), name="reply-create"),
+    path("answers/<int:answer_id>/repli+es/", ReplyCreateView.as_view(), name="reply-create"),
 ]

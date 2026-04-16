@@ -8,8 +8,7 @@ class DiscussionAdmin(admin.ModelAdmin):
     list_filter = ('category', 'created_at') # ডানপাশে ফিল্টার অপশন
     search_fields = ('title', 'body') # সার্চ বক্স
     ordering = ('-created_at',) # সিরিয়াল
-
-# Answer মডেল রেজিস্ট্রেশন
+#answer the model registeration
 @admin.register(Answer)
 class AnswerAdmin(admin.ModelAdmin):
     list_display = ('discussion', 'user', 'created_at')
