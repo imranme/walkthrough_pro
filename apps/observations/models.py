@@ -2,6 +2,7 @@ from django.db import models
 from django.conf import settings
 from django.db.models import Avg
 
+
 class Teacher(models.Model):
     """
     Represents a Teacher profile. 
@@ -14,7 +15,7 @@ class Teacher(models.Model):
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
-        return f"{self.name} ({self.department})"
+        return self.name
 
     @property
     def avg_score(self):

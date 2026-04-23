@@ -18,15 +18,24 @@ class UserSerializer(serializers.ModelSerializer):
     # Subscription status (Read Only)
     subscription_status = serializers.CharField(source="profile.subscription_status", read_only=True)
     is_pro = serializers.BooleanField(source="profile.is_pro", read_only=True)
-
+    role = serializers.SerializerMethodField()
+    is_staff = serializers.BooleanField(read_only=True)
     class Meta:
         model = User
         fields = (
-            "id", "email", "first_name", "last_name", 
+            "id", "email", "first_name", "last_name","role", "is_staff",
             "phone_number", "school_district", "specialization", 
             "years_of_experience", "profile_image", "subscription_status", "is_pro"
         )
-        read_only_fields = ("id",  "email") 
+        read_only_fields = ("id",  "email", "is_staff")
+
+    def get_role(self, obj):
+        if obj.is_superuser:
+            return "super_admin"
+        if obj.is_staff:
+            return "admin"
+        return "oveserver"
+
 
     def update(self, instance, validated_data):
         # Profile data pop kora (Nested Write)

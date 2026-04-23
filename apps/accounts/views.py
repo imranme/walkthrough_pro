@@ -32,23 +32,56 @@ class RegisterView(generics.CreateAPIView):
             }
         }, status=status.HTTP_201_CREATED)
 
+# class LoginView(APIView):
+#     """Screen 1: Email & Password Login"""
+#     permission_classes = [permissions.AllowAny]
+
+#     def post(self, request):
+#         email = request.data.get("email")
+#         password = request.data.get("password")
+
+#         # Email diye user khunje ber kora
+#         user_obj = User.objects.filter(email=email).first()
+#         if user_obj:
+#             user = authenticate(username=user_obj.username, password=password)
+#             if user:
+#                 refresh = RefreshToken.for_user(user)
+#                 return Response({
+#                     "tokens": {"refresh": str(refresh), "access": str(refresh.access_token)},
+#                     "user": UserSerializer(user).data
+#                 }, status=status.HTTP_200_OK)
+
+#         return Response({"error": "Invalid email or password."}, status=status.HTTP_401_UNAUTHORIZED)
+
 class LoginView(APIView):
-    """Screen 1: Email & Password Login"""
+    """Screen 1: Email & Password Login with Role-based Routing"""
     permission_classes = [permissions.AllowAny]
 
     def post(self, request):
         email = request.data.get("email")
         password = request.data.get("password")
 
-        # Email diye user khunje ber kora
         user_obj = User.objects.filter(email=email).first()
         if user_obj:
             user = authenticate(username=user_obj.username, password=password)
             if user:
                 refresh = RefreshToken.for_user(user)
+                
+                if user.is_superuser or user.is_staff:
+                    redirect_path = "/admin-dashboard"
+                    role = "admin" if user.is_staff else "super_admin"
+                else:
+                    redirect_path = "/home" # Regular user der home page e pathano hobe
+                    role = "observer"
+
                 return Response({
-                    "tokens": {"refresh": str(refresh), "access": str(refresh.access_token)},
-                    "user": UserSerializer(user).data
+                    "tokens": {
+                        "refresh": str(refresh), 
+                        "access": str(refresh.access_token)
+                    },
+                    "user": UserSerializer(user).data,
+                    "role": role,
+                    "redirect_to": redirect_path
                 }, status=status.HTTP_200_OK)
 
         return Response({"error": "Invalid email or password."}, status=status.HTTP_401_UNAUTHORIZED)
@@ -140,31 +173,6 @@ class ResetPasswordView(APIView):
         return Response({"error": "User not found."}, status=404)
 
 
-
-# class ResetPasswordView(APIView):
-#     """Screen 4 & 5: Verify OTP and Set New Password"""
-#     permission_classes = [permissions.AllowAny]
-
-#     def post(self, request):
-#         email = request.data.get('email')
-#         otp = request.data.get('otp')
-#         new_password = request.data.get('password')
-#         confirm_password = request.data.get('confirm_password')
-        
-#         if new_password != confirm_password:
-#             return Response({"error": "Passwords do not match."}, status=400)
-
-#         user = User.objects.filter(email=email).first()
-#         # String comparison nishchit kora
-#         if user and str(user.profile.otp_code) == str(otp):
-#             user.set_password(new_password)
-#             user.save()
-#             user.profile.otp_code = None
-#             user.profile.save()
-#             return Response({"message": "Password reset successful."}, status=200)
-        
-#         return Response({"error": "Invalid OTP or Email."}, status=400)
-
 # ══════════════════════════════════════════════════════════════════════════════
 # 3. PROFILE & SETTINGS
 # ══════════════════════════════════════════════════════════════════════════════
@@ -207,3 +215,22 @@ class DeleteAccountView(generics.DestroyAPIView):
 
     def get_object(self):
         return self.request.user
+
+class IsSuperUser(permissions.BasePermission):
+ 
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_superuser)
+
+class IsSuperUser(permissions.BasePermission):
+    def has_permission(self, request, view):
+        return bool(request.user and request.user.is_superuser)
+
+    def post(self, request):
+        user_id = request.data.get("user_id")
+        try:
+            target_user = User.objects.get(id=user_id)
+            target_user.is_staff = True # তাকে অ্যাডমিন বানানো হলো
+            target_user.save()
+            return Response({"message": f"{target_user.email} কে এখন অ্যাডমিন হিসেবে সেট করা হয়েছে।"}, status=200)
+        except User.DoesNotExist:
+            return Response({"error": "User not found."}, status=404)

@@ -3,7 +3,8 @@ from .views import (
     TeacherListCreateView, 
     ObservationListCreateView, 
     DashboardStatsView,
-    RecentObservationsView
+    RecentObservationsView,
+    DomainAnalyticsView
 )
 
 urlpatterns = [
@@ -16,4 +17,6 @@ urlpatterns = [
 
     # Observation Management (Start New Observation & Recent List)
     path('observations/', ObservationListCreateView.as_view(), name='observation-list-create'),
+    #observations management
+    path('analytics/', DomainAnalyticsView.as_view(), name='domain-analytics'),
 ]

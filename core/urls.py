@@ -8,8 +8,8 @@ urlpatterns = [
     path('api/v1/auth/', include('apps.accounts.urls')), 
     path('api/v1/', include('apps.observations.urls')),
     path('api/v1/community/', include('apps.community.urls')),
+    # path('api/v1/observations/', include('apps.observations.urls')),
 ]
 
-# নিচের এই অংশটি শুধু একবার থাকবে এবং সিনট্যাক্স ঠিক করা হয়েছে
 if settings.DEBUG:
     urlpatterns += static(settings.MEDIA_URL, document_root=settings.MEDIA_ROOT)
