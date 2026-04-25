@@ -2,6 +2,7 @@ from pathlib import Path
 from datetime import timedelta
 import os
 import sys
+from corsheaders.defaults import default_headers
 
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -35,6 +36,7 @@ INSTALLED_APPS = [
     'apps.accounts',
     'apps.observations',
     'apps.community',
+    # 'apps.payments',
 ]
 
 # ── REST FRAMEWORK CONFIG ─────────────────────────────────────────────────────
@@ -93,6 +95,10 @@ DATABASES = {
     }
 }
 
+CORS_ALLOW_HEADERS = list(default_headers) + [
+    "ngrok-skip-browser-warning",
+]
+
 AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.UserAttributeSimilarityValidator'},
     {'NAME': 'django.contrib.auth.password_validation.MinimumLengthValidator'},
@@ -113,3 +119,13 @@ MEDIA_URL = '/media/'
 
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+
+
+publishable_key = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_test_51SeikRFpkuP7inz6FdfZIf2BksgE4Wj1XcudMQU8JZHeVwqFy5dG2PZ95aTT6xcSXFxiw6wTmR8zdqXHLX0H43Qe00NCENh5xY")
+
+secret_key      = os.getenv("STRIPE_SECRET_KEY", "sk_test_51SeikRFpkuP7inz6XU8ZOWaqI7wwBbKDSPPolwGxcCcZ9GYCdLRycQAHVee4UTNtp2zCvDGtGvYMM5Tvr5YmZgBM00nzoJjAb9")
+
+STRIPE_PRO_PRICE_ID = os.getenv("STRIPE_PRO_PRICE_ID", "price_1TPqGKFpkuP7inz6o4m6oDgO")
+
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
