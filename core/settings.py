@@ -1,19 +1,32 @@
-from pathlib import Path
-from datetime import timedelta
 import os
 import sys
+import environ
+from pathlib import Path
+from datetime import timedelta
 from corsheaders.defaults import default_headers
+
+# ১. Environment Variables Setup
+env = environ.Env(
+    DEBUG=(bool, False)
+)
 
 # Build paths inside the project
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# ── IMPORTANT: ADD THIS LINE ──────────────────────────────────────────────────
-# Eita chara 'accounts' app khunje pabe na
-sys.path.insert(0, os.path.join(BASE_DIR, 'apps'))
-# ──────────────────────────────────────────────────────────────────────────────
+# .env ফাইলটি পড়ার জন্য (Base Directory তে থাকতে হবে)
+environ.Env.read_env(os.path.join(BASE_DIR, '.env'))
 
-SECRET_KEY = 'django-insecure-l$23+bj#atv=b5h^)8n@a$u=-pdb_%et5=@rfvd8mbknqd$-#1'
-DEBUG = True
+# ২. PATH Management (AI এবং Apps এর জন্য)
+sys.path.insert(0, os.path.join(BASE_DIR, 'apps'))
+
+# AI ফোল্ডারের জন্য (যাতে বাইরের ai/ ফোল্ডারটি জ্যাঙ্গো চিনতে পারে)
+AI_DIR = os.path.join(BASE_DIR, 'ai')
+if os.path.exists(AI_DIR):
+    sys.path.insert(0, AI_DIR)
+    sys.path.insert(0, os.path.join(AI_DIR, 'app'))
+
+SECRET_KEY = env('SECRET_KEY', default='django-insecure-default-key')
+DEBUG = env('DEBUG', default=False)
 ALLOWED_HOSTS = ['*']
 
 INSTALLED_APPS = [
@@ -37,6 +50,7 @@ INSTALLED_APPS = [
     'apps.observations',
     'apps.community',
     # 'apps.payments',
+    #'apps.ai_engine',
 ]
 
 # ── REST FRAMEWORK CONFIG ─────────────────────────────────────────────────────
@@ -114,18 +128,8 @@ USE_TZ = True
 
 STATIC_URL = '/static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-
 MEDIA_URL = '/media/'
-
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 
-
-publishable_key = os.getenv("STRIPE_PUBLISHABLE_KEY", "pk_test_51SeikRFpkuP7inz6FdfZIf2BksgE4Wj1XcudMQU8JZHeVwqFy5dG2PZ95aTT6xcSXFxiw6wTmR8zdqXHLX0H43Qe00NCENh5xY")
-
-secret_key      = os.getenv("STRIPE_SECRET_KEY", "sk_test_51SeikRFpkuP7inz6XU8ZOWaqI7wwBbKDSPPolwGxcCcZ9GYCdLRycQAHVee4UTNtp2zCvDGtGvYMM5Tvr5YmZgBM00nzoJjAb9")
-
-STRIPE_PRO_PRICE_ID = os.getenv("STRIPE_PRO_PRICE_ID", "price_1TPqGKFpkuP7inz6o4m6oDgO")
-
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
