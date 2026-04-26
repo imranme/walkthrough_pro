@@ -1,0 +1,43 @@
+# Python files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+env/
+ENV/
+bin/
+lib/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.installed.cfg
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Django specific
+db.sqlite3
+db.sqlite3-journal
+media/
+staticfiles/
+
+# Sensitive Information (THIS IS CRITICAL)
+.env
+.env.local
+.env.*
+secrets.json
+
+# IDEs and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
