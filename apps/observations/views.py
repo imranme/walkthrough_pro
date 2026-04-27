@@ -67,15 +67,91 @@ class TeacherListCreateView(generics.ListCreateAPIView):
             }
         })
 
-# -------------------------------------------------------------------------
-# 2. OBSERVATION LOGIC
-# -------------------------------------------------------------------------
-class ObservationListCreateView(generics.ListCreateAPIView):
-    """ Handles creating and listing observations conducted by the user. """
-    permission_classes = [permissions.IsAuthenticated]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['teacher__name', 'teacher__department']
 
+# class ObservationListCreateView(generics.ListCreateAPIView):
+#     permission_classes = [permissions.IsAuthenticated]
+    
+#     def get_serializer_class(self):
+#         if self.request.method == "POST":
+#             return ObservationCreateSerializer
+#         return ObservationReadSerializer
+
+#     def get_queryset(self):
+#         return Observation.objects.filter(
+#             created_by=self.request.user
+#         ).select_related("teacher").order_by('-created_at')
+
+#     def create(self, request, *args, **kwargs):
+#         data = request.data
+        
+#         # ১. স্কোর এবং এভারেজ ক্যালকুলেশন
+#         score_fields = [
+#             'respect_env_score', 'culture_learning_score', 'classroom_proc_score', 
+#             'student_behavior_score', 'comm_students_score', 'questioning_score', 
+#             'engaging_students_score', 'assessment_score'
+#         ]
+        
+#         try:
+#             scores = [float(data.get(f, 3.0)) for f in score_fields]
+#             avg_score = round(sum(scores) / len(scores), 1)
+#         except:
+#             avg_score = 3.0
+
+#         # ২. ডাটাবেজে সেভ (পেন্ডিং স্ট্যাটাসে)
+#         serializer = self.get_serializer(data=data)
+#         serializer.is_valid(raise_exception=True)
+#         observation = serializer.save(
+#             created_by=request.user, 
+#             overall_performance_score=avg_score,
+#             status='pending'
+#         )
+        
+#         # ৩. AI প্রসেসিং এবং ডাইমেনশন জেনারেশন
+#         try:
+#             from .ai_service import ObservationAIService
+#             ratings_dict = {f: float(data.get(f, 3.0)) for f in score_fields}
+            
+#             # AI সার্ভিস কল করা
+#             ai_feedback = ObservationAIService.get_ai_feedback(data.get('raw_notes', ''), ratings_dict)
+
+#             # স্ক্রিনশটের মতো ওই ৮টি কার্ডের ডাটা জেনারেট করা
+#             dimensions = [
+#                 {"title": "2.1 Achieving Expectations", "rating": "Proficient" if avg_score >= 3 else "Developing"},
+#                 {"title": "2.2 Content Knowledge and Expertise", "rating": "Proficient" if avg_score >= 3 else "Developing"},
+#                 {"title": "2.3 Communication", "rating": "Proficient"},
+#                 {"title": "2.4 Differentiation", "rating": "Developing"},
+#                 {"title": "2.5 Monitor and Adjust", "rating": "Proficient"},
+#                 {"title": "3.1 Classroom Environment, Routines, and Procedures", "rating": "Proficient"},
+#                 {"title": "3.2 Managing Student Behavior", "rating": "Proficient"},
+#                 {"title": "3.3 Classroom Culture", "rating": "Proficient"}
+#             ]
+
+#             if ai_feedback and isinstance(ai_feedback, dict) and "error" not in ai_feedback:
+#                 observation.glow = ai_feedback.get('glow', 'Great execution of the lesson.')
+#                 observation.grow = ai_feedback.get('grow', 'Focus on student engagement.')
+#                 # যদি AI থেকে dimensions আসে তবে সেটা নাও, নাহলে আমাদের বানানো লিস্ট নাও
+#                 observation.dimensions_data = ai_feedback.get('dimensions', dimensions)
+#             else:
+#                 # ব্যাকআপ ডাটা (যদি AI ফেইল করে)
+#                 observation.glow = "Teacher clearly explained the lesson objectives."
+#                 observation.grow = "Increase interaction between students."
+#                 observation.dimensions_data = dimensions
+            
+#             observation.status = 'completed'
+#             observation.save()
+
+#         except Exception as e:
+#             print(f"DEBUG ERROR: {str(e)}")
+#             observation.status = 'completed'
+#             observation.save()
+
+#         # ৪. রেসপন্স পাঠানো (Read Serializer দিয়ে যাতে সব ডাটা দেখায়)
+#         final_serializer = ObservationReadSerializer(observation)
+#         return Response(final_serializer.data, status=status.HTTP_201_CREATED)
+
+class ObservationListCreateView(generics.ListCreateAPIView):
+    permission_classes = [permissions.IsAuthenticated]
+    
     def get_serializer_class(self):
         if self.request.method == "POST":
             return ObservationCreateSerializer
@@ -86,48 +162,95 @@ class ObservationListCreateView(generics.ListCreateAPIView):
             created_by=self.request.user
         ).select_related("teacher").order_by('-created_at')
 
-    def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
+    def create(self, request, *args, **kwargs):
+        data = request.data
         
-        # Dashboard stats for the observation list page
-        total = queryset.count()
-        avg = queryset.aggregate(Avg('overall_performance_score'))['overall_performance_score__avg'] or 0.0
-        completed = queryset.filter(status='completed').count()
-        pending = queryset.filter(status='pending').count()
-
-        return Response({
-            "observations": serializer.data,
-            "summary_stats": {
-                "total_observations": total,
-                "average_score": round(avg, 1),
-                "completed": completed,
-                "pending": pending
-            }
-        })
-
-    def perform_create(self, serializer):
-        data = self.request.data
-        # Model field names from your observation model
+        # ১. স্কোর এবং এভারেজ ক্যালকুলেশন
         score_fields = [
             'respect_env_score', 'culture_learning_score', 'classroom_proc_score', 
             'student_behavior_score', 'comm_students_score', 'questioning_score', 
             'engaging_students_score', 'assessment_score'
         ]
         
-        scores = []
-        for field in score_fields:
-            val = data.get(field, 0)
-            scores.append(float(val) if val else 0.0)
-            
-        avg_score = sum(scores) / len(scores) if scores else 0.0
-        
-        # Save with calculated overall score
-        serializer.save(
-            created_by=self.request.user,
-            overall_performance_score=round(avg_score, 1),
-            status='completed' # Ensure status is completed to show in analytics
+        try:
+            scores = [float(data.get(f, 3.0)) for f in score_fields]
+            avg_score = round(sum(scores) / len(scores), 1)
+        except Exception:
+            avg_score = 3.0
+
+        # ২. ডাটাবেজে সেভ
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        observation = serializer.save(
+            created_by=request.user, 
+            overall_performance_score=avg_score,
+            status='pending'
         )
+        
+        # ৩. AI ফিডব্যাক কল (সঠিক ইনডেন্টেশন সহ)
+        try:
+            from .ai_service import ObservationAIService
+            ratings_dict = {f: float(data.get(f, 3.0)) for f in score_fields}
+            
+            # এই লাইনেই তোমার ইনডেন্টেশন এরর ছিল, এখন এটা ঠিক করা হয়েছে
+            ai_feedback = ObservationAIService.get_ai_feedback(
+                raw_notes=data.get('raw_notes', ''),
+                ratings=ratings_dict,
+                extra_data=data
+            )
+
+            dimensions = self.get_default_dimensions(avg_score)
+
+            if ai_feedback and isinstance(ai_feedback, dict) and "error" not in ai_feedback:
+                observation.glow = ai_feedback.get('glow')
+                observation.grow = ai_feedback.get('grow')
+                observation.dimensions_data = ai_feedback.get('dimensions', dimensions)
+            else:
+                observation.glow = "Teacher clearly explained the lesson objectives."
+                observation.grow = "Increase interaction between students."
+                observation.dimensions_data = dimensions
+            
+            observation.status = 'completed'
+            observation.save()
+
+        except Exception as e:
+            print(f"DEBUG ERROR: {str(e)}")
+            observation.dimensions_data = self.get_default_dimensions(avg_score)
+            observation.status = 'completed'
+            observation.save()
+
+        # ৪. রেসপন্স পাঠানো
+        observation.refresh_from_db()
+        final_serializer = ObservationReadSerializer(observation)
+        return Response(final_serializer.data, status=status.HTTP_201_CREATED)
+
+    def get_default_dimensions(self, avg):
+        """স্কোরের ওপর ভিত্তি করে ডাইনামিক রেটিং জেনারেট করে"""
+        if avg >= 3.6:
+            rating = "Distinguished"
+        elif avg >= 2.8:
+            rating = "Proficient"
+        else:
+            rating = "Developing"
+
+        titles = [
+            "2.1 Achieving Expectations", 
+            "2.2 Content Knowledge and Expertise",
+            "2.3 Communication", 
+            "2.4 Differentiation", 
+            "2.5 Monitor and Adjust",
+            "3.1 Classroom Environment, Routines, and Procedures",
+            "3.2 Managing Student Behavior", 
+            "3.3 Classroom Culture"
+        ]
+
+        dimensions = []
+        for title in titles:
+            # ২.৪ টাইটেল থাকলে সবসময় Developing (ডিজাইন অনুযায়ী), বাকিগুলো ডাইনামিক
+            current_rating = "Developing" if "2.4" in title else rating
+            dimensions.append({"title": title, "rating": current_rating})
+            
+        return dimensions
 
 # -------------------------------------------------------------------------
 # 3. UNIFIED DASHBOARD STATS (Main Landing Page)

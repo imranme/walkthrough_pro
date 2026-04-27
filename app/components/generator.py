@@ -1,0 +1,559 @@
+"""
+generator.py
+------------
+AI Coaching Result Generator for the T-TESS Observation Tool.
+
+Responsibilities
+----------------
+1. Validate raw observation form data.
+2. Build a structured prompt aligned with the T-TESS rubric dimensions.
+3. Call the OpenAI API and parse the JSON response.
+4. Return a strongly-typed ``CoachingResult`` object.
+
+T-TESS Dimensions covered
+--------------------------
+Domain 2 – Classroom Environment
+    2.1  Creating an Environment of Respect
+    2.2  Establishing a Culture for Learning
+    2.3  Managing Classroom Procedures
+    2.4  Managing Student Behavior
+
+Domain 3 – Instruction
+    3.1  Communicating with Students
+    3.2  Using Questioning and Discussion
+    3.3  Engaging Students in Learning
+    3.4  Using Assessment in Instruction
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+
+import openai
+
+
+_HERE = Path(__file__).resolve()
+_APP_DIR = _HERE.parent        # start: app/components/
+for _ in range(6):             # safety guard
+    if (_APP_DIR / "common").is_dir():
+        break
+    _APP_DIR = _APP_DIR.parent
+
+if str(_APP_DIR) not in sys.path:
+    sys.path.insert(0, str(_APP_DIR))
+
+from common.custom_exception import (
+    ConfigurationError,
+    InvalidObservationDataError,
+    OpenAIClientError,
+    OpenAIRateLimitError,
+    OpenAITimeoutError,
+    RubricParsingError,
+)
+from config.settings import settings
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Constants — match EXACTLY what the Figma form shows
+# ---------------------------------------------------------------------------
+
+# Domain 2: Classroom Environment
+# Domain 3: Instruction
+DIMENSIONS: dict[str, str] = {
+    "2.1": "Creating an Environment of Respect",
+    "2.2": "Establishing a Culture for Learning",
+    "2.3": "Managing Classroom Procedures",
+    "2.4": "Managing Student Behavior",
+    "3.1": "Communicating with Students",
+    "3.2": "Using Questioning and Discussion",
+    "3.3": "Engaging Students in Learning",
+    "3.4": "Using Assessment in Instruction",
+}
+
+DOMAIN_DIMENSION_MAP: dict[str, list[str]] = {
+    "Domain 2 - Classroom Environment": ["2.1", "2.2", "2.3", "2.4"],
+    "Domain 3 - Instruction":           ["3.1", "3.2", "3.3", "3.4"],
+}
+
+VALID_RATINGS = {
+    "Distinguished",
+    "Accomplished",
+    "Proficient",
+    "Developing",
+    "Improvement Needed",
+}
+
+RATING_NUMERIC: dict[str, float] = {
+    "Distinguished":      4.0,
+    "Accomplished":       3.5,
+    "Proficient":         3.0,
+    "Developing":         2.0,
+    "Improvement Needed": 1.0,
+}
+
+
+# ---------------------------------------------------------------------------
+# Data classes
+# ---------------------------------------------------------------------------
+
+@dataclass
+class ObservationData:
+    """Input payload representing a completed observation form."""
+
+    teacher_name: str
+    subject:      str
+    grade_level:  str
+    date:         str
+    time:         str
+    observation_notes: str
+
+    # Domain 2 – Classroom Environment sub-scores (1.0–4.0, entered by observer)
+    d2_creating_environment:   float = 3.0   # 2.1 Creating an Environment of Respect
+    d2_culture_for_learning:   float = 3.0   # 2.2 Establishing a Culture for Learning
+    d2_classroom_procedures:   float = 3.0   # 2.3 Managing Classroom Procedures
+    d2_student_behavior:       float = 3.0   # 2.4 Managing Student Behavior
+
+    # Domain 3 – Instruction sub-scores (1.0–4.0, entered by observer)
+    d3_communicating_students: float = 3.0   # 3.1 Communicating with Students
+    d3_questioning_discussion: float = 3.0   # 3.2 Using Questioning and Discussion
+    d3_engaging_learning:      float = 3.0   # 3.3 Engaging Students in Learning
+    d3_assessment_instruction: float = 3.0   # 3.4 Using Assessment in Instruction
+
+
+@dataclass
+class DimensionResult:
+    """AI-generated coaching output for a single T-TESS dimension."""
+
+    dimension_id:       str    # e.g. "2.1"
+    dimension_name:     str    # e.g. "Creating an Environment of Respect"
+    observer_score:     float  # raw score entered by observer (1.0–4.0)
+    rating:             str    # one of VALID_RATINGS (AI-assigned)
+    rating_numeric:     float  # numeric from RATING_NUMERIC
+    coaching_feedback:  str    # 2–3 sentence evidence-based coaching note
+    growth_suggestion:  str    # 1–2 actionable next steps
+
+
+@dataclass
+class CoachingResult:
+    """Full AI coaching output for one observation."""
+
+    teacher_name:       str
+    date:               str
+    raw_notes_summary:  str                        # ~3-sentence lesson summary
+
+    dimensions: list[DimensionResult] = field(default_factory=list)
+
+    # Computed after dimensions are populated
+    domain_scores:  dict[str, float] = field(default_factory=dict)
+    overall_score:  float = 0.0
+
+    def compute_scores(self) -> None:
+        """Calculate domain averages and overall score from AI rating numerics."""
+        domain_sums: dict[str, list[float]] = {d: [] for d in DOMAIN_DIMENSION_MAP}
+
+        for dim in self.dimensions:
+            for domain, dim_ids in DOMAIN_DIMENSION_MAP.items():
+                if dim.dimension_id in dim_ids:
+                    domain_sums[domain].append(dim.rating_numeric)
+
+        self.domain_scores = {
+            domain: round(sum(scores) / len(scores), 1) if scores else 0.0
+            for domain, scores in domain_sums.items()
+        }
+
+        all_scores = [s for scores in domain_sums.values() for s in scores]
+        self.overall_score = (
+            round(sum(all_scores) / len(all_scores), 1) if all_scores else 0.0
+        )
+
+
+# ---------------------------------------------------------------------------
+# System prompt — aligned to Figma domain/sub-item names
+# ---------------------------------------------------------------------------
+
+_SYSTEM_PROMPT = """
+You are an expert instructional coach certified in the Texas Teacher Evaluation and Support System (T-TESS).
+Your job is to generate structured coaching feedback for each T-TESS dimension using:
+  1. The observer's numeric score (AUTHORITATIVE — you must respect it)
+  2. The observation notes (EVIDENCE SOURCE — only reference what is written there)
+  3. The official T-TESS rubric descriptors below (LANGUAGE SOURCE — use these to frame feedback)
+
+═══════════════════════════════════════════════════════════════
+STEP 1 — CONVERT SCORE TO RATING LABEL (mandatory, no exceptions)
+═══════════════════════════════════════════════════════════════
+  3.5 – 4.0  →  Distinguished
+  2.8 – 3.4  →  Accomplished
+  2.3 – 2.7  →  Proficient
+  1.5 – 2.2  →  Developing
+  1.0 – 1.4  →  Improvement Needed
+
+You MUST use the observer's score to determine the rating. Do NOT assign your own score.
+
+═══════════════════════════════════════════════════════════════
+STEP 2 — USE THESE RUBRIC DESCRIPTORS TO WRITE FEEDBACK
+═══════════════════════════════════════════════════════════════
+For each dimension below, you have the exact T-TESS descriptor for every rating level.
+When writing coaching_feedback and growth_suggestion:
+  - Ground your feedback in BOTH the observation notes AND the rubric descriptor for the assigned rating
+  - Quote specific moments from the notes as evidence
+  - Use the NEXT higher rating level's descriptor to write the growth_suggestion (what to aim for next)
+  - If score is Distinguished, growth_suggestion should reinforce sustainability and spread to peers
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 2.1 — Creating an Environment of Respect
+Focus: mutual respect, positive interactions, inclusive language, emotional safety, dignity for all learners
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Provides opportunities for students to establish high academic/social-emotional expectations for themselves. Persists until ALL students demonstrate mastery. Enables students to self-monitor, self-correct, and set their own goals over time.
+  Accomplished:       Provides opportunities for students to establish high expectations. Persists until MOST students show mastery. Anticipates student mistakes, encourages avoiding learning pitfalls. Establishes systems for student initiative and self-monitoring.
+  Proficient:         Sets academic expectations challenging all students. Persists until most students show mastery. Addresses mistakes and follows through. Provides opportunities for student initiative.
+  Developing:         Sets expectations challenging MOST students. Persists until SOME students show mastery. Sometimes addresses mistakes. Sometimes provides initiative opportunities.
+  Improvement Needed: Sets expectations challenging FEW students. Concludes lesson even with few demonstrating mastery. Allows mistakes to go unaddressed or discourages effort. Rarely provides initiative opportunities.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 2.2 — Establishing a Culture for Learning
+Focus: high expectations, value of hard work, student pride in work, rigorous academic environment
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Displays extensive content knowledge across subjects and closely related areas. Integrates objectives with other disciplines, content areas, and real-world experience. Consistently anticipates misunderstandings and proactively mitigates. Consistently provides varied thinking types. Sequences instruction to show how lesson fits discipline, standards, and real-world scenarios.
+  Accomplished:       Conveys depth allowing differentiated explanations. Integrates with other disciplines and real-world. Anticipates misunderstandings proactively. Regularly provides varied thinking types. Sequences to show fit within discipline and standards.
+  Proficient:         Conveys accurate content in multiple contexts. Integrates with other disciplines. Anticipates misunderstandings. Provides varied thinking opportunities. Accurately reflects how lesson fits discipline and standards.
+  Developing:         Conveys accurate content. Sometimes integrates with other disciplines. Sometimes anticipates misunderstandings. Sometimes provides varied thinking types.
+  Improvement Needed: Conveys inaccurate content leading to confusion. Rarely integrates disciplines. Does not anticipate misunderstandings. Provides few varied thinking opportunities.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 2.3 — Managing Classroom Procedures
+Focus: efficient routines, transitions, materials management, minimal instructional time lost
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Establishes classroom practices encouraging ALL students to communicate safely and effectively using varied tools with teacher and peers. Uses misunderstandings strategically to highlight misconceptions and inspire discovery. Clear, coherent explanations, correct communication. Asks creative/evaluative/analysis questions. Skillfully balances wait time, questioning, and student responses for student-directed learning. Skillfully provokes student-led learning of meaningful content.
+  Accomplished:       Establishes practices encouraging all to communicate effectively including visual tools and technology. Anticipates misunderstandings proactively. Clear, coherent explanations and correct communication. Asks creative/evaluative/analysis questions provoking thought. Skillfully uses probing questions. Provides wait time.
+  Proficient:         Establishes practices for most students to communicate with teacher and peers. Recognizes misunderstandings and responds with array of techniques. Clear explanations and correct communication. Asks remember/understand/apply questions provoking discussion. Uses probing questions to clarify and elaborate.
+  Developing:         Leads lessons with some opportunity for dialogue. Recognizes misunderstandings but has limited response ability. Generally clear communication with minor grammar errors. Asks remember/understand questions with limited discussion amplification.
+  Improvement Needed: Directs lessons with little dialogue opportunity. Sometimes unaware of or unresponsive to misunderstandings. Inaccurate grammar and written communication. Rarely asks questions or asks ones that don't amplify discussion or align to objective.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 2.4 — Managing Student Behavior
+Focus: consistent behavior system, proactive monitoring, clear expectations, swift fair responses
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Adapts lessons with wide variety of strategies for ALL students' individual needs. Consistently monitors quality of student participation and performance. Always provides differentiated methods and content. Consistently prevents confusion or disengagement by addressing all learning/social-emotional needs.
+  Accomplished:       Adapts lessons for all students' individual needs. Regularly monitors quality. Regularly provides differentiated methods and content. Proactively minimizes confusion or disengagement.
+  Proficient:         Adapts lessons for all students' individual needs. Regularly monitors quality. Provides differentiated methods and content. Recognizes confusion or disengagement and responds.
+  Developing:         Adapts lessons for SOME student needs. Sometimes monitors quality. Sometimes provides differentiated methods. Sometimes recognizes confusion/disengagement and minimally responds.
+  Improvement Needed: Provides one-size-fits-all lessons without differentiation. Rarely monitors quality. Rarely provides differentiated methods. Does not recognize or appropriately respond to confusion/disengagement.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 3.1 — Communicating with Students
+Focus: clear explanations of content and purpose, precise academic language, clear directions
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Systematically gathers student input to monitor and adjust instruction, activities, or pacing for all student needs. Adjusts to maintain engagement. Uses discreet and explicit checks for understanding through questioning and academic feedback.
+  Accomplished:       Utilizes student input to monitor and adjust instruction, activities, and pacing. Adjusts to maintain engagement. Continually checks for understanding through purposeful questioning and feedback.
+  Proficient:         Consistently invites student input to monitor and adjust instruction and activities. Adjusts to maintain engagement. Monitors student behavior and responses for engagement and understanding.
+  Developing:         Sometimes utilizes student input to monitor and adjust. Adjusts within a limited range. Sees student behavior but misses some signs of disengagement. Aware of most responses but misses some misunderstanding clues.
+  Improvement Needed: Rarely uses student input to monitor and adjust. Persists with instruction not engaging students. Generally does not link behavior with engagement/understanding. Makes no attempts to engage disengaged students.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 3.2 — Using Questioning and Discussion
+Focus: varied question types (recall→analysis→evaluation), wait time, equitable participation, student-to-student discussion
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Establishes and uses effective routines, transitions, and procedures primarily relying on student leadership and responsibility. Students take primary responsibility for managing groups, supplies, equipment. Classroom is safe and thoughtfully designed to engage, challenge, and inspire students beyond learning objectives.
+  Accomplished:       Establishes and uses effective routines implemented effortlessly. Students take some responsibility for managing groups, supplies, equipment. Classroom is safe, inviting, and organized for objectives, accessible to all.
+  Proficient:         All procedures, routines, and transitions are clear and efficient. Students actively participate in groups and manage supplies with very limited teacher direction. Classroom is safe and organized, accessible to most students.
+  Developing:         Most procedures provide clear direction but others are unclear and inefficient. Students depend on teacher for managing groups, supplies, equipment. Classroom is safe and accessible but disorganized and cluttered.
+  Improvement Needed: Few procedures guide student behavior. Transitions characterized by confusion and inefficiency. Students often don't know what is expected. Classroom is unsafe, disorganized, uncomfortable. Some students cannot access materials.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 3.3 — Engaging Students in Learning
+Focus: activities aligned to objectives, student intellectual engagement, meaningful tasks, pacing
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Consistently monitors behavior subtly, reinforces positive behaviors appropriately, and intercepts misbehavior fluidly. Students and teacher create, adopt, and maintain classroom behavior standards together.
+  Accomplished:       Consistently encourages and monitors student behavior subtly and responds to misbehavior swiftly. Most students know, understand, and respect classroom behavior standards.
+  Proficient:         Consistently implements the campus and/or classroom behavior system proficiently. Most students meet expected classroom behavior standards.
+  Developing:         Inconsistently implements campus and/or classroom behavior system. Student failure to meet behavior standards interrupts learning.
+  Improvement Needed: Rarely or unfairly enforces campus or classroom behavior standards. Student behavior impedes learning in the classroom.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 3.4 — Using Assessment in Instruction
+Focus: checking for understanding (formal/informal), use of data to adjust pacing, feedback, formative checks
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Consistently engages ALL students with relevant, meaningful learning based on their interests and abilities. Students collaborate positively and encourage each other's efforts and achievements.
+  Accomplished:       Engages all students with relevant, meaningful learning, sometimes adjusting based on interests and abilities. Students collaborate positively with each other and the teacher.
+  Proficient:         Engages all students in relevant, meaningful learning. Students work respectfully individually and in groups.
+  Developing:         Establishes environment where MOST students are engaged. Students are sometimes disrespectful of each other.
+  Improvement Needed: Establishes environment where FEW students are engaged. Students are disrespectful of each other and the teacher.
+
+═══════════════════════════════════════════════════════════════
+STEP 3 — OUTPUT FORMAT
+═══════════════════════════════════════════════════════════════
+Rules:
+  - coaching_feedback: 2–3 sentences. Start with what you observed from the notes. Then explicitly reference what the assigned rating level means per the rubric. Be specific and evidence-based.
+  - growth_suggestion: 1–2 sentences. Reference the NEXT rating level's descriptor as the goal. Give ONE concrete, classroom-ready action step tied to the observation notes.
+  - raw_notes_summary: 3 sentences summarizing the lesson as observed. Only reference what is in the notes.
+  - NEVER fabricate events not in the observation notes.
+  - Respond ONLY with valid JSON — no markdown fences, no preamble.
+
+{
+  "raw_notes_summary": "...",
+  "dimensions": [
+    { "dimension_id": "2.1", "rating": "Accomplished", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "2.2", "rating": "Proficient",   "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "2.3", "rating": "Developing",   "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "2.4", "rating": "Proficient",   "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "3.1", "rating": "Accomplished", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "3.2", "rating": "Developing",   "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "3.3", "rating": "Proficient",   "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "3.4", "rating": "Improvement Needed", "coaching_feedback": "...", "growth_suggestion": "..." }
+  ]
+}
+""".strip()
+
+
+# ---------------------------------------------------------------------------
+# Validation
+# ---------------------------------------------------------------------------
+
+def _validate_observation(data: ObservationData) -> None:
+    """Raise InvalidObservationDataError for missing or invalid fields."""
+    if not data.teacher_name or not data.teacher_name.strip():
+        raise InvalidObservationDataError(
+            "Teacher name is required.", field="teacher_name"
+        )
+    if not data.observation_notes or len(data.observation_notes.strip()) < 30:
+        raise InvalidObservationDataError(
+            "Observation notes must be at least 30 characters.",
+            field="observation_notes",
+            detail=(
+                "Provide enough detail for the AI to make evidence-based "
+                "ratings across all T-TESS dimensions."
+            ),
+        )
+    # Validate all sub-scores are in range
+    sub_scores = {
+        "d2_creating_environment":   data.d2_creating_environment,
+        "d2_culture_for_learning":   data.d2_culture_for_learning,
+        "d2_classroom_procedures":   data.d2_classroom_procedures,
+        "d2_student_behavior":       data.d2_student_behavior,
+        "d3_communicating_students": data.d3_communicating_students,
+        "d3_questioning_discussion": data.d3_questioning_discussion,
+        "d3_engaging_learning":      data.d3_engaging_learning,
+        "d3_assessment_instruction": data.d3_assessment_instruction,
+    }
+    for field_name, val in sub_scores.items():
+        if not (1.0 <= val <= 4.0):
+            raise InvalidObservationDataError(
+                f"{field_name} must be between 1.0 and 4.0.",
+                field=field_name,
+                detail=f"Received: {val}",
+            )
+
+
+# ---------------------------------------------------------------------------
+# Observer score lookup — maps dimension_id → observer's raw slider score
+# ---------------------------------------------------------------------------
+
+def _observer_score_for(dim_id: str, data: ObservationData) -> float:
+    mapping = {
+        "2.1": data.d2_creating_environment,
+        "2.2": data.d2_culture_for_learning,
+        "2.3": data.d2_classroom_procedures,
+        "2.4": data.d2_student_behavior,
+        "3.1": data.d3_communicating_students,
+        "3.2": data.d3_questioning_discussion,
+        "3.3": data.d3_engaging_learning,
+        "3.4": data.d3_assessment_instruction,
+    }
+    return mapping.get(dim_id, 3.0)
+
+
+# ---------------------------------------------------------------------------
+# Prompt builder
+# ---------------------------------------------------------------------------
+
+def _score_to_label(score: float) -> str:
+    """Convert a 1.0-4.0 observer score to the exact T-TESS rating label."""
+    if score >= 3.5:
+        return "Distinguished"
+    elif score >= 2.8:
+        return "Accomplished"
+    elif score >= 2.3:
+        return "Proficient"
+    elif score >= 1.5:
+        return "Developing"
+    else:
+        return "Improvement Needed"
+
+
+def _build_user_prompt(data: ObservationData) -> str:
+    # Pre-compute labels in Python so the AI never needs to do the conversion
+    s21 = data.d2_creating_environment
+    s22 = data.d2_culture_for_learning
+    s23 = data.d2_classroom_procedures
+    s24 = data.d2_student_behavior
+    s31 = data.d3_communicating_students
+    s32 = data.d3_questioning_discussion
+    s33 = data.d3_engaging_learning
+    s34 = data.d3_assessment_instruction
+
+    lines = [
+        f"Teacher : {data.teacher_name}",
+        f"Subject : {data.subject}",
+        f"Grade   : {data.grade_level}",
+        f"Date    : {data.date}",
+        f"Time    : {data.time}",
+        "",
+        "=== Observer Scores (USE THESE EXACT RATING LABELS — do not change them) ===",
+        "  2.1 Creating an Environment of Respect    : " + f"{s21:.1f}" + " / 4.0  →  rating MUST be " + _score_to_label(s21),
+        "  2.2 Establishing a Culture for Learning   : " + f"{s22:.1f}" + " / 4.0  →  rating MUST be " + _score_to_label(s22),
+        "  2.3 Managing Classroom Procedures         : " + f"{s23:.1f}" + " / 4.0  →  rating MUST be " + _score_to_label(s23),
+        "  2.4 Managing Student Behavior             : " + f"{s24:.1f}" + " / 4.0  →  rating MUST be " + _score_to_label(s24),
+        "  3.1 Communicating with Students           : " + f"{s31:.1f}" + " / 4.0  →  rating MUST be " + _score_to_label(s31),
+        "  3.2 Using Questioning and Discussion      : " + f"{s32:.1f}" + " / 4.0  →  rating MUST be " + _score_to_label(s32),
+        "  3.3 Engaging Students in Learning         : " + f"{s33:.1f}" + " / 4.0  →  rating MUST be " + _score_to_label(s33),
+        "  3.4 Using Assessment in Instruction       : " + f"{s34:.1f}" + " / 4.0  →  rating MUST be " + _score_to_label(s34),
+        "",
+        "IMPORTANT: Your coaching_feedback and growth_suggestion for each dimension must be",
+        "grounded in specific events from the observation notes below AND the rubric descriptor",
+        "for the assigned rating level. Do not write generic feedback.",
+        "",
+        "=== Observation Notes ===",
+        data.observation_notes.strip(),
+    ]
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Response parser
+# ---------------------------------------------------------------------------
+
+def _parse_response(
+    raw_json: str,
+    data: ObservationData,
+) -> CoachingResult:
+    """Parse the JSON string from the model into a CoachingResult."""
+    try:
+        payload: dict[str, Any] = json.loads(raw_json)
+    except json.JSONDecodeError as exc:
+        raise RubricParsingError(
+            "OpenAI response is not valid JSON.",
+            detail=f"Raw response (first 300 chars): {raw_json[:300]}",
+        ) from exc
+
+    summary = payload.get("raw_notes_summary", "").strip()
+    if not summary:
+        raise RubricParsingError("Missing 'raw_notes_summary' in AI response.")
+
+    result = CoachingResult(
+        teacher_name=data.teacher_name,
+        date=data.date,
+        raw_notes_summary=summary,
+    )
+
+    raw_dims: list[dict] = payload.get("dimensions", [])
+    if not raw_dims:
+        raise RubricParsingError("AI response contains no 'dimensions' array.")
+
+    for item in raw_dims:
+        dim_id = str(item.get("dimension_id", "")).strip()
+        rating = str(item.get("rating", "")).strip()
+
+        if dim_id not in DIMENSIONS:
+            logger.warning("Unrecognised dimension_id '%s' — skipping.", dim_id)
+            continue
+
+        # If AI returned wrong label, override with the correct one from observer score
+        observer_score = _observer_score_for(dim_id, data)
+        expected_rating = _score_to_label(observer_score)
+        if rating not in VALID_RATINGS or rating != expected_rating:
+            logger.warning(
+                "AI returned rating '%s' for %s but expected '%s' — overriding.",
+                rating, dim_id, expected_rating
+            )
+            rating = expected_rating
+
+        result.dimensions.append(
+            DimensionResult(
+                dimension_id=dim_id,
+                dimension_name=DIMENSIONS[dim_id],
+                observer_score=observer_score,
+                rating=rating,
+                rating_numeric=RATING_NUMERIC[rating],
+                coaching_feedback=str(item.get("coaching_feedback", "")).strip(),
+                growth_suggestion=str(item.get("growth_suggestion", "")).strip(),
+            )
+        )
+
+    missing = set(DIMENSIONS) - {d.dimension_id for d in result.dimensions}
+    if missing:
+        logger.warning("AI response is missing dimensions: %s", sorted(missing))
+
+    result.compute_scores()
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Public entry point
+# ---------------------------------------------------------------------------
+
+def generate_coaching_result(data: ObservationData) -> CoachingResult:
+    """
+    Validate observation data, call OpenAI, and return a CoachingResult.
+
+    Raises
+    ------
+    ConfigurationError          OPENAI_API_KEY not set.
+    InvalidObservationDataError Form data fails validation.
+    OpenAIRateLimitError        API returns 429.
+    OpenAITimeoutError          Request times out.
+    OpenAIClientError           Any other OpenAI API error.
+    RubricParsingError          AI response cannot be parsed.
+    """
+    try:
+        settings.validate()
+    except ValueError as exc:
+        raise ConfigurationError(str(exc)) from exc
+
+    _validate_observation(data)
+
+    messages = [
+        {"role": "system", "content": _SYSTEM_PROMPT},
+        {"role": "user",   "content": _build_user_prompt(data)},
+    ]
+
+    client = openai.OpenAI(api_key=settings.OPENAI_API_KEY)
+    logger.info("Calling OpenAI model=%s teacher=%s", settings.OPENAI_MODEL, data.teacher_name)
+
+    try:
+        response = client.chat.completions.create(
+            model=settings.OPENAI_MODEL,
+            messages=messages,
+            max_tokens=settings.OPENAI_MAX_TOKENS,
+            temperature=settings.OPENAI_TEMPERATURE,
+            response_format={"type": "json_object"},
+        )
+    except openai.RateLimitError as exc:
+        raise OpenAIRateLimitError(
+            "OpenAI rate limit reached. Please wait and try again.", cause=exc
+        ) from exc
+    except openai.APITimeoutError as exc:
+        raise OpenAITimeoutError(
+            "The request to OpenAI timed out. Please try again.", cause=exc
+        ) from exc
+    except openai.AuthenticationError as exc:
+        raise ConfigurationError(
+            "OpenAI authentication failed. Check your OPENAI_API_KEY.",
+            detail=str(exc),
+        ) from exc
+    except openai.OpenAIError as exc:
+        raise OpenAIClientError(
+            "An unexpected OpenAI API error occurred.",
+            detail=str(exc),
+            cause=exc,
+        ) from exc
+
+    raw_content = response.choices[0].message.content or ""
+    logger.debug("Raw AI response: %s", raw_content[:500])
+
+    return _parse_response(raw_content, data)

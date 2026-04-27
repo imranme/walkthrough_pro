@@ -1,10 +1,10 @@
+from django.utils.timezone import now
 from rest_framework import serializers
 from django.contrib.auth.models import User
 from django.utils.timesince import timesince
 from .models import Discussion, Answer, Reply
 
 class AuthorSerializer(serializers.ModelSerializer):
-    """Serializes user info for posts and comments."""
     full_name = serializers.CharField(source='get_full_name', read_only=True)
     initials = serializers.SerializerMethodField()
     role = serializers.CharField(source='profile.get_role_display', default="Member")
@@ -14,27 +14,19 @@ class AuthorSerializer(serializers.ModelSerializer):
         fields = ["id", "full_name", "initials", "role"]
 
     def get_initials(self, obj):
-        # Generate initials like 'JD' from first and last name
         f = str(obj.first_name) if obj.first_name else ""
         l = str(obj.last_name) if obj.last_name else ""
-        
         if not f and not l:
             return obj.username.upper() if obj.username else "U"
-        
-        # Take first character from each name
-        f_initial = f if f else ""
-        l_initial = l if l else ""
-        return (f_initial + l_initial).upper()
+        return (f if f else "" + l if l else "").upper()
 
 class ReplySerializer(serializers.ModelSerializer):
-    """Serializer for nested replies."""
     author = AuthorSerializer(source="user", read_only=True)
     class Meta:
         model = Reply
         fields = ["id", "author", "body", "created_at"]
 
 class AnswerSerializer(serializers.ModelSerializer):
-    """Serializer for nested answers/comments."""
     author = AuthorSerializer(source="user", read_only=True)
     replies = ReplySerializer(many=True, read_only=True)
     class Meta:
@@ -42,10 +34,6 @@ class AnswerSerializer(serializers.ModelSerializer):
         fields = ["id", "author", "body", "replies", "created_at"]
 
 class DiscussionListSerializer(serializers.ModelSerializer):
-    """
-    REQUIRED: Used for the community feed list view.
-    Fixes the 'NameError' in views.py.
-    """
     author = AuthorSerializer(source="user", read_only=True)
     time_since = serializers.SerializerMethodField()
     reply_count = serializers.SerializerMethodField()
@@ -56,12 +44,42 @@ class DiscussionListSerializer(serializers.ModelSerializer):
 
     def get_time_since(self, obj):
         try:
-            return f"{timesince(obj.created_at).split(',')} ago"
+            from django.utils.timezone import now
+            delta = now() - obj.created_at
+            
+            seconds = int(delta.total_seconds())
+            
+            # ১ মিনিটের কম হলে
+            if seconds < 60:
+                return "Just now"
+            
+            # মিনিটের হিসেবে
+            minutes = seconds // 60
+            if minutes < 60:
+                return f"{minutes} minutes ago"
+            
+            # ঘণ্টার হিসেবে
+            hours = minutes // 60
+            if hours < 24:
+                return f"{hours} hours ago"
+            
+            # দিনের হিসেবে
+            days = hours // 24
+            if days < 30:
+                return f"{days} days ago"
+            
+            # মাসের হিসেবে
+            months = days // 30
+            if months < 12:
+                return f"{months} months ago"
+            
+            # বছরের হিসেবে
+            return f"{days // 365} years ago"
+            
         except Exception:
             return "Just now"
 
     def get_reply_count(self, obj):
-        # Total count of answers and their subsequent replies
         return obj.answers.count() + Reply.objects.filter(answer__discussion=obj).count()
 
 class DiscussionDetailSerializer(serializers.ModelSerializer):
