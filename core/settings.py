@@ -120,6 +120,7 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
+ALLOWED_HOSTS = ['*', 'particularistically-transelementary-owen.ngrok-free.dev']
 CORS_ALLOW_ALL_ORIGINS = True
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Dhaka'

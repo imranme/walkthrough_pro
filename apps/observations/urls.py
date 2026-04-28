@@ -2,6 +2,7 @@ from django.urls import path
 from .views import (
     TeacherListCreateView, 
     ObservationListCreateView, 
+    ObservationDetailView,
     DashboardStatsView,
     RecentObservationsView,
     DomainAnalyticsView
@@ -17,7 +18,7 @@ urlpatterns = [
 
     # Observation Management (এটাই এখন মেইন এপিআই, যেখানে AI কাজ করবে)
     path('observations/', ObservationListCreateView.as_view(), name='observation-list-create'),
-    
+    path('observations/<int:pk>/', ObservationDetailView.as_view(), name='observation-detail'),
     # Analytics & Graphs
     path('analytics/', DomainAnalyticsView.as_view(), name='domain-analytics'),
     

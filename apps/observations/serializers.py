@@ -54,7 +54,12 @@ class ObservationReadSerializer(serializers.ModelSerializer):
                 "engagement": obj.engaging_students_score,
                 "assessment": obj.assessment_score
             }
-        }
+        } 
+
+class ObservationReadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Observation
+        fields = '__all__' # যাতে dimensions_data, glow, grow সব আসে
 
 class ObservationCreateSerializer(serializers.ModelSerializer):
     """

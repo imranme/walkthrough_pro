@@ -36,7 +36,22 @@ from typing import Any
 
 import openai
 
-
+# ---------------------------------------------------------------------------
+# Path bootstrap
+# ---------------------------------------------------------------------------
+# Layout:
+#   <project_root>/
+#       app/
+#           common/
+#           components/
+#               generator.py   ← THIS file
+#           config/
+#           frontend/
+#       .env
+#
+# We walk upward from __file__ until we find the folder that contains
+# `common/` (that is `app/`) and add it to sys.path.
+# ---------------------------------------------------------------------------
 _HERE = Path(__file__).resolve()
 _APP_DIR = _HERE.parent        # start: app/components/
 for _ in range(6):             # safety guard
@@ -180,132 +195,132 @@ class CoachingResult:
 _SYSTEM_PROMPT = """
 You are an expert instructional coach certified in the Texas Teacher Evaluation and Support System (T-TESS).
 Your job is to generate structured coaching feedback for each T-TESS dimension using:
-  1. The observer's numeric score (AUTHORITATIVE — you must respect it)
-  2. The observation notes (EVIDENCE SOURCE — only reference what is written there)
-  3. The official T-TESS rubric descriptors below (LANGUAGE SOURCE — use these to frame feedback)
+  1. The observer's numeric score (AUTHORITATIVE — you must use it exactly as given)
+  2. The observation notes (EVIDENCE — only cite what is explicitly written there)
+  3. The official T-TESS rubric descriptors below (LANGUAGE — use these to frame your feedback)
 
 ═══════════════════════════════════════════════════════════════
-STEP 1 — CONVERT SCORE TO RATING LABEL (mandatory, no exceptions)
+STEP 1 — RATING LABEL (mandatory, no exceptions, no overrides)
 ═══════════════════════════════════════════════════════════════
-  3.5 – 4.0  →  Distinguished
-  2.8 – 3.4  →  Accomplished
-  2.3 – 2.7  →  Proficient
-  1.5 – 2.2  →  Developing
-  1.0 – 1.4  →  Improvement Needed
-
-You MUST use the observer's score to determine the rating. Do NOT assign your own score.
+The user prompt will tell you the EXACT rating label for each dimension.
+You MUST copy that label exactly into the "rating" field. Do not change it.
 
 ═══════════════════════════════════════════════════════════════
-STEP 2 — USE THESE RUBRIC DESCRIPTORS TO WRITE FEEDBACK
+STEP 2 — RUBRIC DESCRIPTORS (use these to write feedback text)
 ═══════════════════════════════════════════════════════════════
-For each dimension below, you have the exact T-TESS descriptor for every rating level.
-When writing coaching_feedback and growth_suggestion:
-  - Ground your feedback in BOTH the observation notes AND the rubric descriptor for the assigned rating
-  - Quote specific moments from the notes as evidence
-  - Use the NEXT higher rating level's descriptor to write the growth_suggestion (what to aim for next)
-  - If score is Distinguished, growth_suggestion should reinforce sustainability and spread to peers
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 DIMENSION 2.1 — Creating an Environment of Respect
-Focus: mutual respect, positive interactions, inclusive language, emotional safety, dignity for all learners
+Goal: The teacher supports all learners in pursuit of high levels of academic and social-emotional success.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Distinguished:      Provides opportunities for students to establish high academic/social-emotional expectations for themselves. Persists until ALL students demonstrate mastery. Enables students to self-monitor, self-correct, and set their own goals over time.
-  Accomplished:       Provides opportunities for students to establish high expectations. Persists until MOST students show mastery. Anticipates student mistakes, encourages avoiding learning pitfalls. Establishes systems for student initiative and self-monitoring.
-  Proficient:         Sets academic expectations challenging all students. Persists until most students show mastery. Addresses mistakes and follows through. Provides opportunities for student initiative.
+  Distinguished:      Provides opportunities for students to establish high academic AND social-emotional expectations for themselves. Persists until ALL students demonstrate mastery. Provides opportunities for students to self-monitor and self-correct mistakes. Systematically enables students to set goals and monitor progress over time.
+  Accomplished:       Provides opportunities for students to establish high expectations. Persists until MOST students show mastery. Anticipates student mistakes and encourages avoiding learning pitfalls. Establishes systems for student initiative and self-monitoring.
+  Proficient:         Sets academic expectations challenging ALL students. Persists until most students show mastery. Addresses mistakes and follows through to ensure mastery. Provides opportunities for student initiative.
   Developing:         Sets expectations challenging MOST students. Persists until SOME students show mastery. Sometimes addresses mistakes. Sometimes provides initiative opportunities.
-  Improvement Needed: Sets expectations challenging FEW students. Concludes lesson even with few demonstrating mastery. Allows mistakes to go unaddressed or discourages effort. Rarely provides initiative opportunities.
+  Improvement Needed: Sets expectations challenging FEW students. Concludes lesson even when few demonstrate mastery. Allows mistakes to go unaddressed or discourages further effort. Rarely provides initiative opportunities.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIMENSION 2.2 — Establishing a Culture for Learning
-Focus: high expectations, value of hard work, student pride in work, rigorous academic environment
+DIMENSION 2.2 — Content Knowledge and Expertise
+Goal: The teacher uses content and pedagogical expertise to design and execute lessons aligned with standards, related content, and student needs.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Distinguished:      Displays extensive content knowledge across subjects and closely related areas. Integrates objectives with other disciplines, content areas, and real-world experience. Consistently anticipates misunderstandings and proactively mitigates. Consistently provides varied thinking types. Sequences instruction to show how lesson fits discipline, standards, and real-world scenarios.
-  Accomplished:       Conveys depth allowing differentiated explanations. Integrates with other disciplines and real-world. Anticipates misunderstandings proactively. Regularly provides varied thinking types. Sequences to show fit within discipline and standards.
-  Proficient:         Conveys accurate content in multiple contexts. Integrates with other disciplines. Anticipates misunderstandings. Provides varied thinking opportunities. Accurately reflects how lesson fits discipline and standards.
-  Developing:         Conveys accurate content. Sometimes integrates with other disciplines. Sometimes anticipates misunderstandings. Sometimes provides varied thinking types.
-  Improvement Needed: Conveys inaccurate content leading to confusion. Rarely integrates disciplines. Does not anticipate misunderstandings. Provides few varied thinking opportunities.
+  Distinguished:      Displays extensive content knowledge of all subjects taught and closely related subjects. Integrates learning objectives with other disciplines, content areas, and real-world experience. Consistently anticipates misunderstandings and proactively develops techniques to mitigate. Consistently provides varied thinking types (analytical, practical, creative, research-based). Sequences instruction to show how lesson fits discipline, standards, related content, and real-world scenarios.
+  Accomplished:       Conveys depth of content knowledge allowing differentiated explanations. Integrates objectives with other disciplines and real-world experiences. Anticipates misunderstandings proactively. Regularly provides varied thinking types. Sequences instruction to show fit within discipline and standards.
+  Proficient:         Conveys accurate content knowledge in multiple contexts. Integrates objectives with other disciplines. Anticipates possible misunderstandings. Provides varied thinking opportunities. Accurately reflects how lesson fits discipline and standards.
+  Developing:         Conveys accurate content knowledge. Sometimes integrates with other disciplines. Sometimes anticipates misunderstandings. Sometimes provides varied thinking types.
+  Improvement Needed: Conveys inaccurate content leading to student confusion. Rarely integrates disciplines. Does not anticipate misunderstandings. Provides few varied thinking opportunities.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIMENSION 2.3 — Managing Classroom Procedures
-Focus: efficient routines, transitions, materials management, minimal instructional time lost
+DIMENSION 2.3 — Communication
+Goal: The teacher clearly and accurately communicates to support persistence, deeper learning, and effective effort.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Distinguished:      Establishes classroom practices encouraging ALL students to communicate safely and effectively using varied tools with teacher and peers. Uses misunderstandings strategically to highlight misconceptions and inspire discovery. Clear, coherent explanations, correct communication. Asks creative/evaluative/analysis questions. Skillfully balances wait time, questioning, and student responses for student-directed learning. Skillfully provokes student-led learning of meaningful content.
-  Accomplished:       Establishes practices encouraging all to communicate effectively including visual tools and technology. Anticipates misunderstandings proactively. Clear, coherent explanations and correct communication. Asks creative/evaluative/analysis questions provoking thought. Skillfully uses probing questions. Provides wait time.
-  Proficient:         Establishes practices for most students to communicate with teacher and peers. Recognizes misunderstandings and responds with array of techniques. Clear explanations and correct communication. Asks remember/understand/apply questions provoking discussion. Uses probing questions to clarify and elaborate.
-  Developing:         Leads lessons with some opportunity for dialogue. Recognizes misunderstandings but has limited response ability. Generally clear communication with minor grammar errors. Asks remember/understand questions with limited discussion amplification.
-  Improvement Needed: Directs lessons with little dialogue opportunity. Sometimes unaware of or unresponsive to misunderstandings. Inaccurate grammar and written communication. Rarely asks questions or asks ones that don't amplify discussion or align to objective.
+  Distinguished:      Establishes practices encouraging ALL students to communicate safely and effectively using varied tools with teacher and peers. Uses student misunderstandings strategically to inspire exploration and discovery. Clear, coherent explanations and correct communication. Asks creative/evaluative/analysis-level questions requiring deeper understanding. Skillfully balances wait time, questioning, and student responses for student-directed learning. Skillfully provokes student-led learning of meaningful content.
+  Accomplished:       Establishes practices encouraging all students to communicate effectively including visual tools and technology. Anticipates misunderstandings proactively. Clear, coherent explanations and correct communication. Asks creative/evaluative/analysis questions provoking thought and discussion. Skillfully uses probing questions to clarify, elaborate, and extend. Provides wait time.
+  Proficient:         Establishes practices for MOST students to communicate with teacher and peers. Recognizes misunderstandings and responds with array of techniques. Clear explanations and correct communication. Asks remember/understand/apply questions provoking discussion. Uses probing questions to clarify and elaborate.
+  Developing:         Leads lessons with SOME opportunity for dialogue, clarification, or elaboration. Recognizes misunderstandings but has limited response ability. Generally clear communication with minor grammar errors. Asks remember/understand questions that do little to amplify discussion.
+  Improvement Needed: Directs lessons with LITTLE opportunity for dialogue. Sometimes unaware of or unresponsive to misunderstandings. Inaccurate grammar and written communication with errors. Rarely asks questions, or asks ones that do not amplify discussion or align to objective.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIMENSION 2.4 — Managing Student Behavior
-Focus: consistent behavior system, proactive monitoring, clear expectations, swift fair responses
+DIMENSION 2.4 — Differentiation
+Goal: The teacher differentiates instruction, aligning methods and techniques to diverse student needs.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Distinguished:      Adapts lessons with wide variety of strategies for ALL students' individual needs. Consistently monitors quality of student participation and performance. Always provides differentiated methods and content. Consistently prevents confusion or disengagement by addressing all learning/social-emotional needs.
-  Accomplished:       Adapts lessons for all students' individual needs. Regularly monitors quality. Regularly provides differentiated methods and content. Proactively minimizes confusion or disengagement.
-  Proficient:         Adapts lessons for all students' individual needs. Regularly monitors quality. Provides differentiated methods and content. Recognizes confusion or disengagement and responds.
-  Developing:         Adapts lessons for SOME student needs. Sometimes monitors quality. Sometimes provides differentiated methods. Sometimes recognizes confusion/disengagement and minimally responds.
-  Improvement Needed: Provides one-size-fits-all lessons without differentiation. Rarely monitors quality. Rarely provides differentiated methods. Does not recognize or appropriately respond to confusion/disengagement.
+  Distinguished:      Adapts lessons with WIDE VARIETY of strategies to address ALL students' individual needs. Consistently monitors quality of student participation and performance. Always provides differentiated instructional methods and content. Consistently prevents confusion or disengagement by addressing all learning and social/emotional needs.
+  Accomplished:       Adapts lessons to address individual needs of ALL students. Regularly monitors quality. Regularly provides differentiated methods and content. Proactively minimizes confusion or disengagement by addressing learning and social/emotional needs of all.
+  Proficient:         Adapts lessons to address individual needs of ALL students. Regularly monitors quality. Provides differentiated methods and content. Recognizes when students become confused or disengaged and responds to learning or social/emotional needs.
+  Developing:         Adapts lessons to address SOME student needs. Sometimes monitors quality. Sometimes provides differentiated methods and content. Sometimes recognizes confusion/disengagement and minimally responds.
+  Improvement Needed: Provides one-size-fits-all lessons without meaningful differentiation. Rarely monitors quality. Rarely provides differentiated methods. Does not recognize or appropriately respond to confusion/disengagement.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIMENSION 3.1 — Communicating with Students
-Focus: clear explanations of content and purpose, precise academic language, clear directions
+DIMENSION 3.1 — Classroom Environment, Routines, and Procedures
+Goal: The teacher organizes a safe, accessible, and efficient classroom.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Distinguished:      Systematically gathers student input to monitor and adjust instruction, activities, or pacing for all student needs. Adjusts to maintain engagement. Uses discreet and explicit checks for understanding through questioning and academic feedback.
-  Accomplished:       Utilizes student input to monitor and adjust instruction, activities, and pacing. Adjusts to maintain engagement. Continually checks for understanding through purposeful questioning and feedback.
-  Proficient:         Consistently invites student input to monitor and adjust instruction and activities. Adjusts to maintain engagement. Monitors student behavior and responses for engagement and understanding.
-  Developing:         Sometimes utilizes student input to monitor and adjust. Adjusts within a limited range. Sees student behavior but misses some signs of disengagement. Aware of most responses but misses some misunderstanding clues.
-  Improvement Needed: Rarely uses student input to monitor and adjust. Persists with instruction not engaging students. Generally does not link behavior with engagement/understanding. Makes no attempts to engage disengaged students.
-
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIMENSION 3.2 — Using Questioning and Discussion
-Focus: varied question types (recall→analysis→evaluation), wait time, equitable participation, student-to-student discussion
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Distinguished:      Establishes and uses effective routines, transitions, and procedures primarily relying on student leadership and responsibility. Students take primary responsibility for managing groups, supplies, equipment. Classroom is safe and thoughtfully designed to engage, challenge, and inspire students beyond learning objectives.
-  Accomplished:       Establishes and uses effective routines implemented effortlessly. Students take some responsibility for managing groups, supplies, equipment. Classroom is safe, inviting, and organized for objectives, accessible to all.
+  Distinguished:      Establishes routines, transitions, and procedures primarily relying on STUDENT leadership and responsibility. Students take primary responsibility for managing groups, supplies, and equipment. Classroom is safe and thoughtfully designed to engage, challenge, and inspire beyond learning objectives.
+  Accomplished:       Establishes effective routines, transitions, and procedures implemented effortlessly. Students take SOME responsibility for managing groups, supplies, and equipment. Classroom is safe, inviting, and organized to support objectives, accessible to all students.
   Proficient:         All procedures, routines, and transitions are clear and efficient. Students actively participate in groups and manage supplies with very limited teacher direction. Classroom is safe and organized, accessible to most students.
-  Developing:         Most procedures provide clear direction but others are unclear and inefficient. Students depend on teacher for managing groups, supplies, equipment. Classroom is safe and accessible but disorganized and cluttered.
-  Improvement Needed: Few procedures guide student behavior. Transitions characterized by confusion and inefficiency. Students often don't know what is expected. Classroom is unsafe, disorganized, uncomfortable. Some students cannot access materials.
+  Developing:         MOST procedures provide clear direction but others are unclear and inefficient. Students depend on teacher for managing groups, supplies, and equipment. Classroom is safe and accessible to most but disorganized and cluttered.
+  Improvement Needed: FEW procedures guide student behavior. Transitions are characterized by confusion and inefficiency. Students often do not know what is expected. Classroom is unsafe, disorganized, and uncomfortable. Some students cannot access materials.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIMENSION 3.3 — Engaging Students in Learning
-Focus: activities aligned to objectives, student intellectual engagement, meaningful tasks, pacing
+DIMENSION 3.2 — Managing Student Behavior
+Goal: The teacher establishes, communicates, and maintains clear expectations for student behavior.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Distinguished:      Consistently monitors behavior subtly, reinforces positive behaviors appropriately, and intercepts misbehavior fluidly. Students and teacher create, adopt, and maintain classroom behavior standards together.
-  Accomplished:       Consistently encourages and monitors student behavior subtly and responds to misbehavior swiftly. Most students know, understand, and respect classroom behavior standards.
-  Proficient:         Consistently implements the campus and/or classroom behavior system proficiently. Most students meet expected classroom behavior standards.
-  Developing:         Inconsistently implements campus and/or classroom behavior system. Student failure to meet behavior standards interrupts learning.
-  Improvement Needed: Rarely or unfairly enforces campus or classroom behavior standards. Student behavior impedes learning in the classroom.
+  Distinguished:      Consistently monitors behavior SUBTLY, reinforces positive behaviors appropriately, and intercepts misbehavior fluidly. Students AND teacher create, adopt, and maintain classroom behavior standards together.
+  Accomplished:       Consistently encourages and monitors student behavior subtly and responds to misbehavior SWIFTLY. Most students know, understand, and respect classroom behavior standards.
+  Proficient:         Consistently implements campus and/or classroom behavior system PROFICIENTLY. Most students meet expected classroom behavior standards.
+  Developing:         INCONSISTENTLY implements campus and/or classroom behavior system. Student failure to meet behavior standards interrupts learning.
+  Improvement Needed: RARELY or unfairly enforces campus or classroom behavior standards. Student behavior impedes learning in the classroom.
 
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-DIMENSION 3.4 — Using Assessment in Instruction
-Focus: checking for understanding (formal/informal), use of data to adjust pacing, feedback, formative checks
+DIMENSION 3.3 — Classroom Culture
+Goal: The teacher leads a mutually respectful and collaborative class of actively engaged learners.
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-  Distinguished:      Consistently engages ALL students with relevant, meaningful learning based on their interests and abilities. Students collaborate positively and encourage each other's efforts and achievements.
-  Accomplished:       Engages all students with relevant, meaningful learning, sometimes adjusting based on interests and abilities. Students collaborate positively with each other and the teacher.
-  Proficient:         Engages all students in relevant, meaningful learning. Students work respectfully individually and in groups.
-  Developing:         Establishes environment where MOST students are engaged. Students are sometimes disrespectful of each other.
-  Improvement Needed: Establishes environment where FEW students are engaged. Students are disrespectful of each other and the teacher.
+  Distinguished:      Consistently engages ALL students with relevant, meaningful learning based on their interests and abilities. Students collaborate positively and encourage each other's efforts and achievements. Creates positive rapport among students.
+  Accomplished:       Engages ALL students with relevant, meaningful learning, sometimes adjusting based on student interests and abilities. Students collaborate positively with each other and the teacher.
+  Proficient:         Engages ALL students in relevant, meaningful learning. Students work respectfully individually and in groups.
+  Developing:         Establishes environment where MOST students are engaged. Students are SOMETIMES disrespectful of each other.
+  Improvement Needed: Establishes environment where FEW students are engaged. Students are disrespectful of each other AND the teacher.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+DIMENSION 3.4 — Monitor and Adjust
+Goal: The teacher formally and informally collects, analyzes, and uses student progress data and makes needed lesson adjustments.
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+  Distinguished:      Systematically gathers student input to monitor and adjust instruction, activities, or pacing for ALL student needs. Adjusts instruction to maintain engagement. Uses DISCREET and EXPLICIT checks for understanding through questioning and academic feedback.
+  Accomplished:       Utilizes student input to monitor and adjust instruction, activities, AND pacing. Adjusts to maintain engagement. CONTINUALLY checks for understanding through purposeful questioning and feedback.
+  Proficient:         CONSISTENTLY invites student input to monitor and adjust instruction and activities. Adjusts to maintain engagement. Monitors student behavior and responses for engagement and understanding.
+  Developing:         SOMETIMES utilizes student input to monitor and adjust. Adjusts within a limited range. Sees student behavior but misses some signs of disengagement. Aware of most responses but misses some misunderstanding clues.
+  Improvement Needed: RARELY uses student input to monitor and adjust. Persists with instruction not engaging students. Generally does not link behavior with engagement/understanding. Makes no attempts to engage disengaged students.
 
 ═══════════════════════════════════════════════════════════════
-STEP 3 — OUTPUT FORMAT
+STEP 3 — HOW TO WRITE FEEDBACK
 ═══════════════════════════════════════════════════════════════
-Rules:
-  - coaching_feedback: 2–3 sentences. Start with what you observed from the notes. Then explicitly reference what the assigned rating level means per the rubric. Be specific and evidence-based.
-  - growth_suggestion: 1–2 sentences. Reference the NEXT rating level's descriptor as the goal. Give ONE concrete, classroom-ready action step tied to the observation notes.
-  - raw_notes_summary: 3 sentences summarizing the lesson as observed. Only reference what is in the notes.
-  - NEVER fabricate events not in the observation notes.
-  - Respond ONLY with valid JSON — no markdown fences, no preamble.
+For EACH dimension:
+  coaching_feedback (2-3 sentences):
+    • Sentence 1: Cite a SPECIFIC moment from the observation notes as evidence.
+    • Sentence 2: State what the assigned rating level means per the rubric descriptor above.
+    • Sentence 3 (optional): Note a specific strength or specific gap at this level.
 
+  growth_suggestion (1-2 sentences):
+    • Reference the NEXT rating level descriptor as the target.
+    • Give ONE concrete, classroom-ready action step directly tied to the observation notes.
+    • If already Distinguished: suggest how to sustain and share this practice with colleagues.
+
+  raw_notes_summary (3 sentences):
+    • Summarize the full lesson arc from the observation notes only.
+    • Do NOT fabricate any detail not present in the notes.
+
+═══════════════════════════════════════════════════════════════
+STEP 4 — OUTPUT (valid JSON only, no markdown fences, no preamble)
+═══════════════════════════════════════════════════════════════
 {
   "raw_notes_summary": "...",
   "dimensions": [
-    { "dimension_id": "2.1", "rating": "Accomplished", "coaching_feedback": "...", "growth_suggestion": "..." },
-    { "dimension_id": "2.2", "rating": "Proficient",   "coaching_feedback": "...", "growth_suggestion": "..." },
-    { "dimension_id": "2.3", "rating": "Developing",   "coaching_feedback": "...", "growth_suggestion": "..." },
-    { "dimension_id": "2.4", "rating": "Proficient",   "coaching_feedback": "...", "growth_suggestion": "..." },
-    { "dimension_id": "3.1", "rating": "Accomplished", "coaching_feedback": "...", "growth_suggestion": "..." },
-    { "dimension_id": "3.2", "rating": "Developing",   "coaching_feedback": "...", "growth_suggestion": "..." },
-    { "dimension_id": "3.3", "rating": "Proficient",   "coaching_feedback": "...", "growth_suggestion": "..." },
-    { "dimension_id": "3.4", "rating": "Improvement Needed", "coaching_feedback": "...", "growth_suggestion": "..." }
+    { "dimension_id": "2.1", "rating": "<EXACT LABEL FROM USER PROMPT>", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "2.2", "rating": "<EXACT LABEL FROM USER PROMPT>", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "2.3", "rating": "<EXACT LABEL FROM USER PROMPT>", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "2.4", "rating": "<EXACT LABEL FROM USER PROMPT>", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "3.1", "rating": "<EXACT LABEL FROM USER PROMPT>", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "3.2", "rating": "<EXACT LABEL FROM USER PROMPT>", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "3.3", "rating": "<EXACT LABEL FROM USER PROMPT>", "coaching_feedback": "...", "growth_suggestion": "..." },
+    { "dimension_id": "3.4", "rating": "<EXACT LABEL FROM USER PROMPT>", "coaching_feedback": "...", "growth_suggestion": "..." }
   ]
 }
 """.strip()
@@ -373,14 +388,23 @@ def _observer_score_for(dim_id: str, data: ObservationData) -> float:
 # ---------------------------------------------------------------------------
 
 def _score_to_label(score: float) -> str:
-    """Convert a 1.0-4.0 observer score to the exact T-TESS rating label."""
+    """
+    Convert a 1.0-4.0 observer score to the exact T-TESS rating label.
+    Thresholds divide the 1-4 scale into 5 equal bands:
+      4.0        = Distinguished
+      3.5 - 3.99 = Distinguished
+      2.8 - 3.49 = Accomplished
+      2.1 - 2.79 = Proficient
+      1.4 - 2.09 = Developing
+      1.0 - 1.39 = Improvement Needed
+    """
     if score >= 3.5:
         return "Distinguished"
     elif score >= 2.8:
         return "Accomplished"
-    elif score >= 2.3:
+    elif score >= 2.1:
         return "Proficient"
-    elif score >= 1.5:
+    elif score >= 1.4:
         return "Developing"
     else:
         return "Improvement Needed"
