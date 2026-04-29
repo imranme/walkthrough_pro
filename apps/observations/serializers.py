@@ -36,7 +36,7 @@ class ObservationReadSerializer(serializers.ModelSerializer):
             'id', 'teacher_name', 'teacher_dept', 'subject', 'grade_level', 
             'observation_date', 'observation_time', 'overall_performance_score', 
             'domain_scores', 'glow', 'grow', 'dimensions_data', 'status', 'created_at',
-            'raw_notes'
+            'raw_notes', 'rating'
         ]
 
     def get_domain_scores(self, obj):

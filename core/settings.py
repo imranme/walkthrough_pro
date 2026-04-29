@@ -120,7 +120,6 @@ AUTH_PASSWORD_VALIDATORS = [
     {'NAME': 'django.contrib.auth.password_validation.NumericPasswordValidator'},
 ]
 
-ALLOWED_HOSTS = ['*', 'particularistically-transelementary-owen.ngrok-free.dev']
 CORS_ALLOW_ALL_ORIGINS = True
 LANGUAGE_CODE = 'en-us'
 TIME_ZONE = 'Asia/Dhaka'
@@ -133,4 +132,11 @@ MEDIA_URL = '/media/'
 MEDIA_ROOT = os.path.join(BASE_DIR, "media")
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_USE_SSL = False  # এটি নিশ্চিত করো False আছে
 
+EMAIL_HOST_USER = env('EMAIL_HOST_USER')
+EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD')
