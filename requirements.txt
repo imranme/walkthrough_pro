@@ -83,7 +83,6 @@ tenacity==9.1.2
 toml==0.10.2
 tornado==6.5.4
 tqdm==4.67.1
--e git+https://gitlab.betopialimited.com/join-venture-ai/imtz/ai.git@9797614129f9afb18d9733847773787554264cc2#egg=ttes_observer
 typing-inspection==0.4.2
 typing_extensions==4.15.0
 tzdata==2025.3
