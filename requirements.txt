@@ -10,8 +10,6 @@ requests==2.31.0
 pandas==2.2.1
 numpy==1.26.4
 djangorestframework-simplejwt==5.3.1
-
-
 aiohappyeyeballs==2.6.1
 aiohttp==3.13.5
 aiosignal==1.4.0
@@ -50,7 +48,6 @@ langgraph-sdk==0.3.13
 langsmith==0.7.30
 lxml==6.0.2
 MarkupSafe==3.0.3
--e git+https://gitlab.betopialimited.com/join-venture-ai/imtz/ai.git@9797614129f9afb18d9733847773787554264cc2#egg=Multi_AI_chatbot
 multidict==6.7.1
 narwhals==2.14.0
 numpy==2.4.0
