@@ -30,9 +30,13 @@ class DiscussionListCreateView(generics.ListCreateAPIView):
     def get_serializer_class(self):
         return DiscussionCreateSerializer if self.request.method == "POST" else DiscussionListSerializer
 
+    # def get_queryset(self):
+    #     # select_related ডাটাবেস কোয়েরি অপ্টিমাইজ করে
+    #     return Discussion.objects.select_related("user").order_by("-created_at")
+
     def get_queryset(self):
-        # select_related ডাটাবেস কোয়েরি অপ্টিমাইজ করে
-        return Discussion.objects.select_related("user").order_by("-created_at")
+        # "-" চিহ্নটি সরিয়ে দাও, তাহলেই পুরানো পোস্ট আগে আসবে
+        return Discussion.objects.select_related("user").order_by("created_at")
 
     def perform_create(self, serializer):
         serializer.save(user=self.request.user)

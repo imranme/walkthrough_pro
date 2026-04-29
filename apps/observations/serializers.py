@@ -27,16 +27,17 @@ class ObservationReadSerializer(serializers.ModelSerializer):
     """
     teacher_name = serializers.ReadOnlyField(source='teacher.name')
     teacher_dept = serializers.ReadOnlyField(source='teacher.department')
-    # domain_scores = serializers.SerializerMethodField()
+    domain_scores = serializers.SerializerMethodField()
 
     class Meta:
         model = Observation
-        # fields = [
-        #     'id', 'teacher_name', 'teacher_dept', 'subject', 'grade_level', 
-        #     'observation_date', 'observation_time', 'overall_performance_score', 
-        #     'domain_scores', 'glow', 'grow', 'dimensions_data', 'status', 'created_at'
-        # ]
-        fields = ['id', 'teacher_name', 'teacher_dept', 'subject', 'overall_performance_score', 'status', 'observation_date']
+        # এখানে সব ফিল্ড থাকতে হবে, বিশেষ করে glow এবং grow
+        fields = [
+            'id', 'teacher_name', 'teacher_dept', 'subject', 'grade_level', 
+            'observation_date', 'observation_time', 'overall_performance_score', 
+            'domain_scores', 'glow', 'grow', 'dimensions_data', 'status', 'created_at',
+            'raw_notes', 'rating'
+        ]
 
     def get_domain_scores(self, obj):
         """Groups 8 sliders into Domain 2 and Domain 3 as per Figma."""
@@ -53,7 +54,12 @@ class ObservationReadSerializer(serializers.ModelSerializer):
                 "engagement": obj.engaging_students_score,
                 "assessment": obj.assessment_score
             }
-        }
+        } 
+
+class ObservationReadSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Observation
+        fields = '__all__' # যাতে dimensions_data, glow, grow সব আসে
 
 class ObservationCreateSerializer(serializers.ModelSerializer):
     """
