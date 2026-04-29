@@ -50,7 +50,6 @@ lxml==6.0.2
 MarkupSafe==3.0.3
 multidict==6.7.1
 narwhals==2.14.0
-openai==2.6.1
 orjson==3.11.8
 ormsgpack==1.12.2
 packaging==25.0
