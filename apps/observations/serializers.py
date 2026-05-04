@@ -26,6 +26,11 @@ class TeacherSerializer(serializers.ModelSerializer):
             return last_obs.observation_date.strftime("%B %d, %Y")
         return "No data"
 
+class TeacherSimpleSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Teacher
+        fields = ['id', 'name']
+
 class ObservationReadSerializer(serializers.ModelSerializer):
     """
     Detailed view of an Observation for the UI.

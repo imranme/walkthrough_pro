@@ -5,7 +5,8 @@ from .views import (
     ObservationDetailView,
     DashboardStatsView,
     RecentObservationsView,
-    DomainAnalyticsView
+    DomainAnalyticsView,
+    TeacherSimpleListView
 )
 
 urlpatterns = [
@@ -26,6 +27,6 @@ urlpatterns = [
     path('recent/', RecentObservationsView.as_view(), name='recent-observations'),
 
     #theachers list
-    path('teachers/names/', views.TeacherSimpleListView.as_view(), name='teacher-names-list'),
-    
+    path('teachers/names/', TeacherSimpleListView.as_view(), name='teacher-names-list'),
+
 ]

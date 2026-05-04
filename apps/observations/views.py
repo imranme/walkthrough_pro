@@ -9,7 +9,8 @@ from .models import Teacher, Observation
 from .serializers import (
     TeacherSerializer, 
     ObservationReadSerializer, 
-    ObservationCreateSerializer
+    ObservationCreateSerializer,
+    TeacherSimpleSerializer
 )
 
 # -------------------------------------------------------------------------
@@ -577,3 +578,7 @@ class RecentObservationsView(generics.ListAPIView):
         return Observation.objects.filter(
             created_by=self.request.user
         ).select_related("teacher").order_by('-created_at')[:5]
+
+class TeacherSimpleListView(generics.ListAPIView):
+    queryset = Teacher.objects.all().order_by('name') 
+    serializer_class = TeacherSimpleSerializer
