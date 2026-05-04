@@ -7,14 +7,20 @@ from rest_framework.permissions import IsAuthenticated
 
 
 class TeacherSerializer(serializers.ModelSerializer):
-    observations_count = serializers.IntegerField(source='total_observations_count', read_only=True)
+    # Annotate kora field gulo ke read_only hisebe define korun
+    avg_score = serializers.FloatField(read_only=True)
+    observations_count = serializers.IntegerField(source='obs_count', read_only=True)
     last_observation = serializers.SerializerMethodField()
 
     class Meta:
         model = Teacher
+        # 'created_by' field ti list e dorkar na holeo model e thakte hobe 
+        # kintu seta read_only hobe
         fields = ['id', 'name', 'department', 'avg_score', 'observations_count', 'last_observation']
+        read_only_fields = ['created_by']
 
     def get_last_observation(self, obj):
+        # 'observations' as the related name from your FieldError context
         last_obs = obj.observations.order_by('-observation_date').first()
         if last_obs and last_obs.observation_date:
             return last_obs.observation_date.strftime("%B %d, %Y")

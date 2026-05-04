@@ -24,4 +24,8 @@ urlpatterns = [
     
     # Recent Observations
     path('recent/', RecentObservationsView.as_view(), name='recent-observations'),
+
+    #theachers list
+    path('teachers/names/', views.TeacherSimpleListView.as_view(), name='teacher-names-list'),
+    
 ]

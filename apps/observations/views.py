@@ -29,44 +29,52 @@ class TeacherListCreateView(generics.ListCreateAPIView):
     filter_backends = [filters.SearchFilter]
     search_fields = ['name', 'department']
 
+    def perform_create(self, serializer):
+        """
+        ADMIN-er error fix: Teacher create korar somoy 
+        'created_by' field e logged-in admin user ke save kore.
+        """
+        serializer.save(created_by=self.request.user)
+
     def get_queryset(self):
-        # Using 'observations' as suggested by your FieldError choices
+        """
+        Admin shudhu tar nijoer add kora teacher list dekhte parbe.
+        Annotate kora hoyeche jate serializer-e analytics show kora jay.
+        """
         return Teacher.objects.filter(created_by=self.request.user).annotate(
-            obs_count=Count('observations') 
+            obs_count=Count('observations'),
+            avg_score=Avg('observations__overall_performance_score')
         ).order_by('-id')
 
     def list(self, request, *args, **kwargs):
-        # Get the annotated queryset
+        """
+        Summary cards ebong list data eksathe pathanor logic.
+        """
         queryset = self.get_queryset()
         filtered_queryset = self.filter_queryset(queryset)
         
-        # Serialize the teacher data
+        # Serializer ekhon 'avg_score' ebong 'obs_count' auto handle korbe
         serializer = self.get_serializer(filtered_queryset, many=True)
         
-        # 1. Map the annotation count into the serialized response
-        # This adds 'observation_count' to each teacher in the list
-        custom_data = []
-        for i, teacher in enumerate(filtered_queryset):
-            data = serializer.data[i]
-            data['observation_count'] = teacher.obs_count 
-            custom_data.append(data)
-
-        # 2. Analytics for summary cards at the top
+        # Dashboard Summary Analytics
         all_obs = Observation.objects.filter(created_by=request.user)
-        overall_avg = all_obs.aggregate(Avg('overall_performance_score'))['overall_performance_score__avg'] or 0.0
+        overall_avg = all_obs.aggregate(
+            avg=Avg('overall_performance_score')
+        )['avg'] or 0.0
 
         distinguished = 0
         needs_support = 0
+        
         for teacher in filtered_queryset:
-            # Safely check the avg_score property for card stats
-            score = getattr(teacher, 'avg_score', 0)
+            # Annotated queryset theke score check
+            score = teacher.avg_score or 0
             if score >= 3.5:
                 distinguished += 1
             elif 0 < score < 2.5:
                 needs_support += 1
 
         return Response({
-            "teachers": custom_data,
+            "teachers": serializer.data,
             "summary_cards": {
                 "total_teachers": queryset.count(),
                 "overall_avg": round(overall_avg, 1),
@@ -83,6 +91,103 @@ class ObservationDetailView(generics.RetrieveAPIView):
         # শুধুমাত্র নিজের তৈরি করা রিপোর্ট দেখতে পারবে
         return Observation.objects.filter(created_by=self.request.user)
 
+# class ObservationListCreateView(generics.ListCreateAPIView):
+#     """
+#     View to list all observations created by the logged-in user 
+#     or create a new classroom observation with AI feedback.
+#     """
+#     permission_classes = [permissions.IsAuthenticated]
+    
+#     def get_serializer_class(self):
+#         # Use different serializers for reading and writing data
+#         if self.request.method == "POST":
+#             return ObservationCreateSerializer
+#         return ObservationReadSerializer
+
+#     def get_queryset(self):
+#         # Ensure users can only see observations they created
+#         return Observation.objects.filter(
+#             created_by=self.request.user
+#         ).select_related("teacher").order_by('-created_at')
+
+#     def create(self, request, *args, **kwargs):
+#         """
+#         Custom create method to calculate scores and fetch AI coaching feedback.
+#         """
+#         data = request.data
+        
+#         # 1. Score Calculation
+#         score_fields = [
+#             'respect_env_score', 'culture_learning_score', 'classroom_proc_score', 
+#             'student_behavior_score', 'comm_students_score', 'questioning_score', 
+#             'engaging_students_score', 'assessment_score'
+#         ]
+        
+#         try:
+#             scores = [float(data.get(f, 1.0)) for f in score_fields]
+#             avg_score = round(sum(scores) / len(scores), 1)
+#         except (ValueError, TypeError):
+#             avg_score = 1.0
+
+#         # 2. Save Initial Observation
+#         serializer = self.get_serializer(data=data)
+#         serializer.is_valid(raise_exception=True)
+#         observation = serializer.save(
+#             created_by=request.user, 
+#             overall_performance_score=avg_score,
+#             status='pending'
+#         )
+        
+#         # 3. Call AI Service and Update Data
+#         try:
+#             from .ai_service import ObservationAIService
+            
+#             ai_input_data = {
+#                 "teacher_name": observation.teacher.name,
+#                 "subject": data.get('subject', 'N/A'),
+#                 "grade_level": data.get('grade_level', 'N/A'),
+#                 "raw_notes": data.get('raw_notes', ''),
+#                 "observation_date": str(data.get('observation_date')),
+#                 "observation_time": str(data.get('observation_time')),
+#                 "respect_env": max(1.0, float(data.get('respect_env_score', 1.0))),
+#                 "culture": max(1.0, float(data.get('culture_learning_score', 1.0))),
+#                 "procedures": max(1.0, float(data.get('classroom_proc_score', 1.0))),
+#                 "behavior": max(1.0, float(data.get('student_behavior_score', 1.0))),
+#                 "communication": max(1.0, float(data.get('comm_students_score', 1.0))),
+#                 "questioning": max(1.0, float(data.get('questioning_score', 1.0))),
+#                 "engagement": max(1.0, float(data.get('engaging_students_score', 1.0))),
+#                 "assessment": max(1.0, float(data.get('assessment_score', 1.0))),
+#             }
+
+#             ai_response = ObservationAIService.get_ai_feedback(observation_data=ai_input_data)
+
+#             if ai_response and isinstance(ai_response, dict):
+#                 # Update Main Fields
+#                 observation.glow = ai_response.get('glow')
+#                 observation.grow = ai_response.get('grow')
+#                 observation.dimensions_data = ai_response.get('dimensions', [])
+#                 # Final Rating Update
+#                 observation.rating = ai_response.get('overall_rating') or ai_response.get('rating')
+#                 observation.status = 'completed'
+#             else:
+#                 observation.status = 'failed'
+
+#         except Exception as e:
+#             print(f"❌ AI Error: {str(e)}")
+#             observation.status = 'failed'
+        
+#         # Final Save and Refresh
+#         observation.save()
+#         observation.refresh_from_db()
+        
+#         return Response(ObservationReadSerializer(observation).data, status=status.HTTP_201_CREATED)
+
+#     def get_default_dimensions(self, avg):
+#         """Fallback for static dimensions."""
+#         rating = "Developing" if avg < 2.5 else "Proficient"
+#         titles = ["2.1", "2.2", "2.3", "2.4", "3.1", "3.2", "3.3"]
+#         return [{"dimension_id": t, "rating": rating} for t in titles] 
+
 class ObservationListCreateView(generics.ListCreateAPIView):
     """
     View to list all observations created by the logged-in user 
@@ -91,24 +196,19 @@ class ObservationListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
     
     def get_serializer_class(self):
-        # Use different serializers for reading and writing data
         if self.request.method == "POST":
             return ObservationCreateSerializer
         return ObservationReadSerializer
 
     def get_queryset(self):
-        # Ensure users can only see observations they created
         return Observation.objects.filter(
             created_by=self.request.user
         ).select_related("teacher").order_by('-created_at')
 
     def create(self, request, *args, **kwargs):
-        """
-        Custom create method to calculate scores and fetch AI coaching feedback.
-        """
         data = request.data
         
-        # 1. Score Calculation
+        # ১. স্কোর ক্যালকুলেশন
         score_fields = [
             'respect_env_score', 'culture_learning_score', 'classroom_proc_score', 
             'student_behavior_score', 'comm_students_score', 'questioning_score', 
@@ -121,7 +221,7 @@ class ObservationListCreateView(generics.ListCreateAPIView):
         except (ValueError, TypeError):
             avg_score = 1.0
 
-        # 2. Save Initial Observation
+        # ২. ডাটা সেভ করা (ইনিশিয়াল)
         serializer = self.get_serializer(data=data)
         serializer.is_valid(raise_exception=True)
         observation = serializer.save(
@@ -130,7 +230,7 @@ class ObservationListCreateView(generics.ListCreateAPIView):
             status='pending'
         )
         
-        # 3. Call AI Service and Update Data
+        # ৩. AI সার্ভিস কল করা
         try:
             from .ai_service import ObservationAIService
             
@@ -141,44 +241,39 @@ class ObservationListCreateView(generics.ListCreateAPIView):
                 "raw_notes": data.get('raw_notes', ''),
                 "observation_date": str(data.get('observation_date')),
                 "observation_time": str(data.get('observation_time')),
-                "respect_env": max(1.0, float(data.get('respect_env_score', 1.0))),
-                "culture": max(1.0, float(data.get('culture_learning_score', 1.0))),
-                "procedures": max(1.0, float(data.get('classroom_proc_score', 1.0))),
-                "behavior": max(1.0, float(data.get('student_behavior_score', 1.0))),
-                "communication": max(1.0, float(data.get('comm_students_score', 1.0))),
-                "questioning": max(1.0, float(data.get('questioning_score', 1.0))),
-                "engagement": max(1.0, float(data.get('engaging_students_score', 1.0))),
-                "assessment": max(1.0, float(data.get('assessment_score', 1.0))),
+                "respect_env": float(data.get('respect_env_score', 3.0)),
+                "culture": float(data.get('culture_learning_score', 3.0)),
+                "procedures": float(data.get('classroom_proc_score', 3.0)),
+                "behavior": float(data.get('student_behavior_score', 3.0)),
+                "communication": float(data.get('comm_students_score', 3.0)),
+                "questioning": float(data.get('questioning_score', 3.0)),
+                "engagement": float(data.get('engaging_students_score', 3.0)),
+                "assessment": float(data.get('assessment_score', 3.0)),
+                "overall_performance_score": avg_score,
             }
 
             ai_response = ObservationAIService.get_ai_feedback(observation_data=ai_input_data)
 
-            if ai_response and isinstance(ai_response, dict):
-                # Update Main Fields
+            if ai_response:
                 observation.glow = ai_response.get('glow')
                 observation.grow = ai_response.get('grow')
                 observation.dimensions_data = ai_response.get('dimensions', [])
-                # Final Rating Update
-                observation.rating = ai_response.get('overall_rating') or ai_response.get('rating')
+                # 'overall_score' অথবা 'rating' যেটিই আসুক সেটি সেট হবে
+                observation.rating = ai_response.get('overall_score') or ai_response.get('rating')
                 observation.status = 'completed'
             else:
                 observation.status = 'failed'
 
         except Exception as e:
-            print(f"❌ AI Error: {str(e)}")
+            import logging
+            logger = logging.getLogger(__name__)
+            logger.error(f"❌ AI View Error: {str(e)}")
             observation.status = 'failed'
         
-        # Final Save and Refresh
         observation.save()
         observation.refresh_from_db()
         
         return Response(ObservationReadSerializer(observation).data, status=status.HTTP_201_CREATED)
-
-    def get_default_dimensions(self, avg):
-        """Fallback for static dimensions."""
-        rating = "Developing" if avg < 2.5 else "Proficient"
-        titles = ["2.1", "2.2", "2.3", "2.4", "3.1", "3.2", "3.3"]
-        return [{"dimension_id": t, "rating": rating} for t in titles]
 
 
 # class ObservationListCreateView(generics.ListCreateAPIView):
