@@ -29,6 +29,12 @@ SECRET_KEY = env('SECRET_KEY', default='django-insecure-default-key')
 DEBUG = env('DEBUG', default=False)
 ALLOWED_HOSTS = ['*']
 
+# .env থেকে ডেটা পড়া
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['backend.walkthroughpro.app'])
+CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=['https://backend.walkthroughpro.app'])
+
+
+
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
