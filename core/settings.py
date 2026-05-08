@@ -30,7 +30,7 @@ DEBUG = env('DEBUG', default=False)
 ALLOWED_HOSTS = ['*']
 
 # .env থেকে ডেটা পড়া
-ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['backend.walkthroughpro.app'])
+ALLOWED_HOSTS = env.list('ALLOWED_HOSTS', default=['127.0.0.1', 'localhost', 'backend.walkthroughpro.app'])
 CSRF_TRUSTED_ORIGINS = env.list('CSRF_TRUSTED_ORIGINS', default=['https://backend.walkthroughpro.app'])
 
 
