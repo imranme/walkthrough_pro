@@ -1,186 +1,165 @@
-import stripe
 import logging
-from datetime import date
-
+import stripe
 from django.conf import settings
-from django.http import HttpResponse
-from django.utils import timezone
-from django.views.decorators.csrf import csrf_exempt
 from django.contrib.auth import get_user_model
-
-from rest_framework.views import APIView
+from django.http import HttpResponse
+from django.views.decorators.csrf import csrf_exempt
+from rest_framework import generics, permissions, status
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
-from rest_framework import status, generics
+from rest_framework.views import APIView
 
-from .models import Subscription, Invoice
+from .models import Invoice, Subscription
 from .serializers import InvoiceSerializer, SubscriptionSerializer
 
+# API Key Global কনফিগারেশন
+stripe.api_key = settings.STRIPE_SECRET_KEY
 logger = logging.getLogger(__name__)
 User = get_user_model()
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 1. StartTrialView - Initializes 5-day trial
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ══════════════════════════════════════════════════════════════════════
+# 1. Start Trial: Initialize the 5-day window
+# ══════════════════════════════════════════════════════════════════════
 class StartTrialView(APIView):
-    """
-    Initializes a 5-day free trial for a newly registered user.
-    Prevents multiple trial creation for the same user.
-    """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
         if hasattr(request.user, 'subscription'):
-            return Response(
-                {"message": "Subscription record already exists."},
-                status=status.HTTP_400_BAD_REQUEST,
-            )
+            sub = request.user.subscription
+            if sub.status == 'active': # লজিক সহজ করা হলো
+                return Response({"error": "Active Pro plan detected."}, status=400)
+            if sub.status == 'trial':
+                return Response({
+                    "message": "Trial is already running.",
+                    "days_remaining": sub.trial_days_remaining
+                })
 
-        sub = Subscription.objects.create(user=request.user)
+        # নতুন ট্রায়াল তৈরি
+        sub = Subscription.objects.create(
+            user=request.user,
+            plan_type='free_trial',
+            status='trial',
+        )
         return Response({
-            "message": "Your 5-day free trial has started!",
+            "message": "5-day free trial started!",
             "trial_end_date": sub.trial_end_date,
+            "days_remaining": sub.trial_days_remaining,
         }, status=status.HTTP_201_CREATED)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 2. SubscriptionStatusView - Current plan details
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ══════════════════════════════════════════════════════════════════════
+# 2. Subscription Status: Access decision endpoint
+# ══════════════════════════════════════════════════════════════════════
 class SubscriptionStatusView(APIView):
-    """
-    Returns the current plan type and status.
-    Provides the upgrade URL if the trial is expired.
-    """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         try:
             sub = request.user.subscription
         except Subscription.DoesNotExist:
-            return Response({"error": "No subscription found."}, status=404)
+            return Response({"has_subscription": False}, status=404)
 
         return Response({
-            "plan_type":   sub.plan_type,
-            "status":      sub.status,
-            "is_active":   sub.is_active,
-            "trial_end_date": sub.trial_end_date,
-            "upgrade_url": "https://walkthroughpro.com/pricing",
+            "plan_type": sub.plan_type,
+            "status": sub.status,
+            "is_fully_active": sub.is_fully_active,
+            # এটি নিশ্চিত করবে যে ট্রায়াল বা একটিভ—উভয় ক্ষেত্রেই এক্সেস পাবে
+            "can_access_dashboard": sub.status in ['active', 'trial'], 
+            "trial_days_remaining": sub.trial_days_remaining,
         })
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 3. CreateCheckoutSessionView - Stripe Redirect
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ══════════════════════════════════════════════════════════════════════
+# 3. Stripe Checkout: Payment Session Generation
+# ══════════════════════════════════════════════════════════════════════
 class CreateCheckoutSessionView(APIView):
-    """
-    Creates a Stripe Checkout session and returns the URL.
-    The frontend should redirect the user to this URL for payment.
-    """
-    permission_classes = [IsAuthenticated]
+    permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        stripe.api_key = settings.STRIPE_SECRET_KEY
+        user = request.user
         try:
+            sub = getattr(user, 'subscription', None)
+            customer_id = sub.stripe_customer_id if sub else None
+
+            # কাস্টমার না থাকলে তৈরি করা
+            if not customer_id:
+                customer = stripe.Customer.create(email=user.email, name=user.username)
+                customer_id = customer.id
+                if sub:
+                    sub.stripe_customer_id = customer_id
+                    sub.save(update_fields=['stripe_customer_id'])
+
             session = stripe.checkout.Session.create(
+                customer=customer_id,
                 payment_method_types=['card'],
-                line_items=[{
-                    'price': settings.STRIPE_PRO_PRICE_ID,
-                    'quantity': 1,
-                }],
+                line_items=[{'price': settings.STRIPE_PRO_PRICE_ID, 'quantity': 1}],
                 mode='subscription',
                 success_url=f"{settings.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
                 cancel_url=f"{settings.FRONTEND_URL}/pricing",
-                client_reference_id=str(request.user.id),
+                client_reference_id=str(user.pk),
+                metadata={'user_id': str(user.pk)},
             )
-            return Response({'url': session.url})
-        except stripe.error.StripeError as e:
-            logger.error(f"Stripe Session Error: {str(e)}")
-            return Response({'error': str(e)}, status=400)
+            return Response({"url": session.url, "session_id": session.id})
+        except Exception as e:
+            return Response({"error": str(e)}, status=400)
 
+# ══════════════════════════════════════════════════════════════════════
+# 4. New Views: Verify, Cancel & Invoices
+# ══════════════════════════════════════════════════════════════════════
+class VerifyPaymentView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def get(self, request):
+        sub = getattr(request.user, 'subscription', None)
+        if sub and sub.status == 'active':
+            return Response({"status": "success", "message": "Verified!"})
+        return Response({"status": "pending"}, status=202)
 
-# ══════════════════════════════════════════════════════════════════════════════
-# 4. InvoiceListView - Billing History
-# ══════════════════════════════════════════════════════════════════════════════
+class CancelSubscriptionView(APIView):
+    permission_classes = [permissions.IsAuthenticated]
+    def post(self, request):
+        # এখানে স্ট্রাইপ ক্যান্সেল লজিক পরবর্তীতে যোগ করতে পারবেন
+        return Response({"message": "Cancellation request received."})
 
 class InvoiceListView(generics.ListAPIView):
-    """Returns a list of all paid/failed invoices for the current user."""
     serializer_class = InvoiceSerializer
-    permission_classes = [IsAuthenticated]
-
+    permission_classes = [permissions.IsAuthenticated]
     def get_queryset(self):
-        return Invoice.objects.filter(user=self.request.user)
+        return Invoice.objects.filter(subscription__user=self.request.user)
 
-
-# ══════════════════════════════════════════════════════════════════════════════
-# 5. Stripe Webhook - Asynchronous Updates
-# ══════════════════════════════════════════════════════════════════════════════
-
+# ══════════════════════════════════════════════════════════════════════
+# 5. Stripe Webhook
+# ══════════════════════════════════════════════════════════════════════
 @csrf_exempt
 def stripe_webhook(request):
-    """
-    Listens to Stripe events to activate Pro plans and record invoices.
-    Must be configured in Stripe Dashboard/CLI.
-    """
-    stripe.api_key = settings.STRIPE_SECRET_KEY
     payload = request.body
     sig_header = request.META.get('HTTP_STRIPE_SIGNATURE', '')
-
     try:
         event = stripe.Webhook.construct_event(
             payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
         )
-    except (ValueError, stripe.error.SignatureVerificationError):
+    except Exception as e:
+        logger.error(f"Webhook Signature Error: {e}")
         return HttpResponse(status=400)
 
-    # A. User completes payment successfully
+    data = event['data']['object']
     if event['type'] == 'checkout.session.completed':
-        session = event['data']['object']
-        user_id = session.get('client_reference_id')
-
-        try:
-            user = User.objects.get(pk=user_id)
-            sub, _ = Subscription.objects.get_or_create(user=user)
-            sub.plan_type = 'professional'
-            sub.status    = 'active'
-            sub.stripe_subscription_id = session.get('subscription')
-            sub.save()
-            logger.info(f"User {user_id} upgraded to Professional.")
-        except Exception as e:
-            logger.error(f"Upgrade Error for user {user_id}: {e}")
-
-    # B. Payment record (Invoice) is generated
-    elif event['type'] == 'invoice.paid':
-        inv_data = event['data']['object']
-        stripe_sub_id = inv_data.get('subscription')
-
-        try:
-            # Find user based on the subscription ID stored in our DB
-            sub = Subscription.objects.get(stripe_subscription_id=stripe_sub_id)
-            Invoice.objects.update_or_create(
-                stripe_invoice_id=inv_data['id'],
-                defaults={
-                    'user': sub.user,
-                    'amount_cents': inv_data.get('amount_paid', 0),
-                    'status': 'paid',
-                    'invoice_date': date.fromtimestamp(inv_data.get('created', 0)),
-                    'invoice_pdf_url': inv_data.get('invoice_pdf', ''),
-                },
-            )
-        except Exception as e:
-            logger.error(f"Invoice logging failed: {e}")
-
-    # C. Subscription expires or is cancelled
-    elif event['type'] == 'customer.subscription.deleted':
-        sub_data = event['data']['object']
-        try:
-            sub = Subscription.objects.get(stripe_subscription_id=sub_data['id'])
-            sub.status = 'expired'
-            sub.save()
-            logger.info(f"Subscription {sub_data['id']} marked as expired.")
-        except Subscription.DoesNotExist:
-            pass
-
+        _activate_pro(data)
+    
     return HttpResponse(status=200)
+
+def _activate_pro(session):
+    # client_reference_id অথবা metadata থেকে ইউজার আইডি নেওয়া
+    user_id = session.get('client_reference_id') or session.get('metadata', {}).get('user_id')
+    if not user_id:
+        logger.error("No User ID found in Webhook session")
+        return
+
+    try:
+        user = User.objects.get(pk=user_id)
+        # get_or_create ব্যবহার করা নিরাপদ যেন ক্র্যাশ না করে
+        sub, created = Subscription.objects.get_or_create(user=user)
+        sub.plan_type = 'professional'
+        sub.status = 'active'
+        sub.stripe_subscription_id = session.get('subscription')
+        sub.stripe_customer_id = session.get('customer')
+        sub.save()
+        logger.info(f"User {user.email} upgraded to PRO.")
+    except Exception as e:
+        logger.error(f"Activation Error: {e}")

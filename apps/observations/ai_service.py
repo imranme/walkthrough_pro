@@ -1,6 +1,7 @@
 import logging
 import sys
 from pathlib import Path
+from app.components.generator import ObservationData, generate_coaching_result
 
 logger = logging.getLogger(__name__)
 
