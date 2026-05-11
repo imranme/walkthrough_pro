@@ -7,7 +7,7 @@ from django.views.decorators.csrf import csrf_exempt
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-
+from rest_framework.permissions import IsAuthenticated
 from .models import Invoice, Subscription
 from .serializers import InvoiceSerializer, SubscriptionSerializer
 
@@ -145,21 +145,41 @@ def stripe_webhook(request):
     return HttpResponse(status=200)
 
 def _activate_pro(session):
-    # client_reference_id অথবা metadata থেকে ইউজার আইডি নেওয়া
-    user_id = session.get('client_reference_id') or session.get('metadata', {}).get('user_id')
+    # StripeObject থেকে ডাটা নেয়ার সঠিক নিয়ম
+    user_id = getattr(session, 'client_reference_id', None)
     if not user_id:
-        logger.error("No User ID found in Webhook session")
-        return
+        metadata = getattr(session, 'metadata', {})
+        user_id = metadata.get('user_id')
 
-    try:
-        user = User.objects.get(pk=user_id)
-        # get_or_create ব্যবহার করা নিরাপদ যেন ক্র্যাশ না করে
-        sub, created = Subscription.objects.get_or_create(user=user)
-        sub.plan_type = 'professional'
-        sub.status = 'active'
-        sub.stripe_subscription_id = session.get('subscription')
-        sub.stripe_customer_id = session.get('customer')
-        sub.save()
-        logger.info(f"User {user.email} upgraded to PRO.")
-    except Exception as e:
-        logger.error(f"Activation Error: {e}")
+    if user_id:
+        try:
+            from apps.payments.models import Subscription
+            from django.contrib.auth import get_user_model
+            User = get_user_model()
+            user = User.objects.get(pk=user_id)
+            
+            sub, _ = Subscription.objects.get_or_create(user=user)
+            sub.plan_type = 'professional'
+            sub.status = 'active'
+            sub.save()
+            return True
+        except Exception as e:
+            print(f"Error: {e}")
+    return False 
+
+class InvoiceListView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def get(self, request):
+        try:
+            # এখানে 'subscription' নয়, 'user' ব্যবহার করতে হবে
+            invoices = Invoice.objects.filter(user=request.user).order_by('-invoice_date')
+            
+            # আপনি যদি কোনো সিরিয়ালাইজার ব্যবহার করেন:
+            from .serializers import InvoiceSerializer
+            serializer = InvoiceSerializer(invoices, many=True)
+            return Response(serializer.data, status=200)
+
+        except Exception as e:
+            # এরর হলে সেটি যেন রেসপন্সে দেখা যায়
+            return Response({"error": str(e)}, status=500)

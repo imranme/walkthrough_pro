@@ -9,11 +9,14 @@ from .serializers import *
 from .serializers import DiscussionCreateSerializer, DiscussionListSerializer
 
 class CommunityStatsView(APIView):
-    permission_classes = [permissions.AllowAny]
+    permission_classes = [permissions.IsAdminUser]
+
     def get(self, request):
+        # নিচের এই ৩টি লাইন অবশ্যই সমান দূরত্বে (একই ইনডেন্টেশনে) থাকতে হবে
         total_discussions = Discussion.objects.count()
         total_answered = Discussion.objects.annotate(ans_count=Count('answers')).filter(ans_count__gt=0).count()
         total_replies = Answer.objects.count() + Reply.objects.count()
+        
         return Response({
             "total_discussions": total_discussions,
             "total_answered": total_answered,
