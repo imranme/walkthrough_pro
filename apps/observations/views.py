@@ -20,10 +20,17 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════
 # 1. TEACHER
 # ═══════════════════════════════════════════════════════════════════════
+class IsAdminOrReadOnly(permissions.BasePermission):
+    def has_permission(self, request, view):
+        if request.method in permissions.SAFE_METHODS:
+            return request.user.is_authenticated
+        return request.user.is_authenticated and request.user.is_staff
+
+
 
 class TeacherListCreateView(generics.ListCreateAPIView):
     serializer_class   = TeacherSerializer
-    permission_classes = [permissions.IsAuthenticated, permissions.IsAdminUser]
+    permission_classes = [IsAdminOrReadOnly] 
     filter_backends    = [filters.SearchFilter]
     search_fields      = ['name', 'department']
 
@@ -71,13 +78,12 @@ class TeacherListCreateView(generics.ListCreateAPIView):
 class TeacherSimpleListView(generics.ListAPIView):
     """Mobile Observation Form-এর Select Teacher dropdown।"""
     serializer_class   = TeacherSimpleSerializer
+    # এখানে শুধু লজড-ইন থাকলেই হবে (Admin/Observer both)
     permission_classes = [permissions.IsAuthenticated]
 
     def get_queryset(self):
-        return Teacher.objects.filter(
-            created_by=self.request.user
-        ).order_by('name')
-
+        # FIX: filter(created_by) সরিয়ে দেওয়া হয়েছে যাতে সবাই টিচার লিস্ট পায়
+        return Teacher.objects.all().order_by('name')
 
 # ═══════════════════════════════════════════════════════════════════════
 # 2. OBSERVATION

@@ -179,7 +179,7 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "ngrok-skip-browser-warning",
 ]
-
+ALLOWED_HOSTS = ["*"]
 # ─────────────────────────────────────────────────────────────
 # INTERNATIONALIZATION
 # ─────────────────────────────────────────────────────────────
