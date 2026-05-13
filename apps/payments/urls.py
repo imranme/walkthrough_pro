@@ -39,4 +39,6 @@ urlpatterns = [
     
     # Stripe Webhook: Server-to-Server endpoint (Must be CSRF-exempt in views)
     path('webhook/', stripe_webhook, name='stripe-webhook'),
+
+    path('start-trial/', StartTrialView.as_view(), name='start-trial'),
 ]

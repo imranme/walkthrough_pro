@@ -1,13 +1,3 @@
-"""
-Access Control Permissions for Walkthrough Pro.
-────────────────────────────────────────────────
-This module enforces specific business rules:
-1. Observers: Full App access during 5-day trial or with Pro subscription.
-             NEVER allowed to access the Dashboard.
-2. Admins:    Full App & Dashboard access during 5-day trial or with Pro subscription.
-3. Global:    Restricts access to protected APIs once the 5-day trial expires.
-"""
-
 from django.utils import timezone
 from rest_framework.permissions import BasePermission
 from django.http import JsonResponse
@@ -155,3 +145,15 @@ class TrialExpiryMiddleware:
                         return JsonResponse(TRIAL_EXPIRED_RESPONSE, status=403)
 
         return self.get_response(request)
+
+# ══════════════════════════════════════════════════════════════════════
+# 4. Helper for Views
+# ══════════════════════════════════════════════════════════════════════
+
+def _has_active_access(user):
+    """
+    Checks if the user has an active subscription or is within trial.
+    Used by views to guard specific actions.
+    """
+    sub = _get_sub(user)
+    return bool(sub and sub.is_fully_active)
