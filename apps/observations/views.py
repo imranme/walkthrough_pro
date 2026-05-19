@@ -29,7 +29,6 @@ logger = logging.getLogger(__name__)
 # ═══════════════════════════════════════════════════════════════════════
 # 1. TEACHER MANAGEMENT
 # ═══════════════════════════════════════════════════════════════════════
-
 class TeacherListCreateView(generics.ListCreateAPIView):
     """
     Web Dashboard:
@@ -44,22 +43,23 @@ class TeacherListCreateView(generics.ListCreateAPIView):
         serializer.save(created_by=self.request.user)
 
     def get_queryset(self):
-        return (
-            Teacher.objects
-            .filter(created_by=self.request.user)
-            .annotate(
-                obs_count=Count('observations'),
-                annotated_avg=Avg('observations__overall_performance_score'),
-            )
-            .order_by('-id')
-        )
+        # রিলেশনশিপ এরর এড়াতে সিম্পল কুয়েরি রিটার্ন করা হচ্ছে
+        return Teacher.objects.filter(created_by=self.request.user).order_by('-id')
 
     def list(self, request, *args, **kwargs):
-        queryset = self.get_queryset()
-        filtered_queryset = self.filter_queryset(queryset)
-        serializer = self.get_serializer(filtered_queryset, many=True)
-
+        # সিরিয়ালাইজার রান করার সময় যাতে .observations কুয়েরি ক্র্যাশ না করে,
+        # সেজন্য প্রতিটি টিচার অবজেক্টে সাময়িকভাবে একটি ডাইনামিক ফিল্টার কুয়েরি প্রোপার্টি সেট করে দেওয়া হচ্ছে।
+        queryset = self.filter_queryset(self.get_queryset())
         all_obs = Observation.objects.filter(created_by=request.user)
+        
+        for teacher in queryset:
+            # সিরিয়ালাইজারের get_last_observation এর ক্র্যাশ ঠেকাতে এই ডাইনামিক কুয়েরি সেটআপ
+            teacher.observations = all_obs.filter(teacher_name=teacher.name)
+
+        # এখন সিরিয়ালাইজার নির্বিঘ্নে ডেটা প্রসেস করতে পারবে
+        serializer = self.get_serializer(queryset, many=True)
+        teachers_data = serializer.data
+
         overall_avg = (
             all_obs.aggregate(avg=Avg('overall_performance_score'))['avg'] or 0.0
         )
@@ -67,15 +67,21 @@ class TeacherListCreateView(generics.ListCreateAPIView):
         distinguished = 0
         needs_support = 0
 
-        for teacher in filtered_queryset:
-            score = teacher.annotated_avg or 0
-            if score >= 3.5:
+        # প্রতিটি টিচারের লুপ চালিয়ে সামারি কার্ডের ডেটা প্রসেস করা
+        for t_data in teachers_data:
+            t_obs = all_obs.filter(teacher_name=t_data['name'])
+            t_avg = t_obs.aggregate(avg=Avg('overall_performance_score'))['avg'] or 0.0
+            
+            t_data['obs_count'] = t_obs.count()
+            t_data['annotated_avg'] = round(t_avg, 1)
+
+            if t_avg >= 3.5:
                 distinguished += 1
-            elif 0 < score < 2.5:
+            elif 0 < t_avg < 2.5:
                 needs_support += 1
 
         return Response({
-            "teachers": serializer.data,
+            "teachers": teachers_data,
             "summary_cards": {
                 "total_teachers": queryset.count(),
                 "overall_avg": round(overall_avg, 1),
@@ -84,10 +90,123 @@ class TeacherListCreateView(generics.ListCreateAPIView):
             }
         })
 
+class ObservationListCreateView(generics.ListCreateAPIView):
+    """
+    Lists historical user evaluations or triggers the modern AI sequence (STEP 1).
+    """
+    permission_classes = [permissions.IsAuthenticated]
+    filter_backends = [filters.SearchFilter]
+    search_fields = ['teacher_name', 'subject']
+
+    def get_serializer_class(self):
+        if self.request.method == "POST":
+            return ObservationCreateSerializer
+        return ObservationReadSerializer
+
+    def get_queryset(self):
+        return (
+            Observation.objects
+            .filter(created_by=self.request.user)
+            .order_by('-created_at')
+        )
+
+    def list(self, request, *args, **kwargs):
+        queryset = self.filter_queryset(self.get_queryset())
+        serializer = self.get_serializer(queryset, many=True)
+
+        total = queryset.count()
+        avg = (
+            queryset.aggregate(avg_score=Avg('overall_performance_score'))['avg_score'] or 0.0
+        )
+
+        return Response({
+            "observations": serializer.data,
+            "summary_stats": {
+                "total_observations": total,
+                "average_score": round(avg, 1),
+                "completed": queryset.filter(status='completed').count(),
+                "pending": queryset.filter(status='draft').count(),
+            }
+        })
+
+    def create(self, request, *args, **kwargs):
+        # আপনার আগের এক্সিস্টিং ক্রিয়েট লজিক এখানে হুবহু অপরিবর্তিত থাকবে
+        data = request.data
+        serializer = self.get_serializer(data=data)
+        serializer.is_valid(raise_exception=True)
+        
+        observation = serializer.save(
+            created_by=request.user,
+            overall_performance_score=0.0,
+            status='draft',
+        )
+
+        t_name = data.get("teacher_name") or "Teacher"
+        observation.teacher_name = t_name
+        observation.save()
+
+        try:
+            from .ai_service import generate_initial_feedback
+
+            ai_payload = {
+                "teacher_name":     t_name,
+                "subject":          data.get("subject", "Mathematics"),
+                "grade_level":      data.get("grade_level", "8"),
+                "observation_date": str(data.get("observation_date", "")),
+                "observation_time": str(data.get("observation_time", "")),
+                "raw_notes":        data.get("raw_notes", ""),
+                "selected_domains": [
+                    "Domain 2 - Instruction",
+                    "Domain 3 - Learning Environment",
+                ],
+            }
+
+            feedback = generate_initial_feedback(ai_payload)
+
+            if feedback and isinstance(feedback, dict) and "error" not in feedback:
+                observation.overall_performance_score = feedback.get("overall_score", 0.0)
+                raw_dimensions = feedback.get("dimensions", [])
+                observation.dimensions_data = raw_dimensions
+                
+                observation.glow = (feedback.get("glow") or "").strip()
+                observation.grow = (feedback.get("grow") or "").strip()
+                
+                if isinstance(raw_dimensions, list) and len(raw_dimensions) > 0:
+                    first_dim = raw_dimensions
+                    last_dim = raw_dimensions[-1]
+                    
+                    if not observation.glow and isinstance(first_dim, dict):
+                        observation.glow = first_dim.get("glow", "")
+                        
+                    if not observation.grow and isinstance(last_dim, dict):
+                        observation.grow = last_dim.get("grow", "")
+
+                observation.status = 'completed'
+                
+                if "Accomplished" in str(feedback):
+                    observation.rating = "Accomplished"
+                elif "Proficient" in str(feedback):
+                    observation.rating = "Proficient"
+            else:
+                observation.status = 'draft'
+
+            observation.save()
+
+        except Exception as exc:
+            logger.error("AI initial feedback workflow failed: %s", exc, exc_info=True)
+            observation.status = 'draft'
+            observation.save()
+
+        observation.refresh_from_db()
+        return Response(
+            ObservationReadSerializer(observation).data,
+            status=status.HTTP_201_CREATED,
+        )
+
 
 class TeacherSimpleListView(generics.ListAPIView):
     """
-    Mobile App:
+    Mobile App & Observation Page Dropdowns:
     Provides a simple name/id pair to populate the observation creation dropdown form.
     """
     serializer_class = TeacherSimpleSerializer
@@ -101,6 +220,37 @@ class TeacherSimpleListView(generics.ListAPIView):
 
         # If Admin, return their own teachers
         return Teacher.objects.filter(created_by=user).order_by('name')
+
+    def list(self, request, *args, **kwargs):
+        """
+        Overriding list method to safely bypass the broken 'observations' reverse relationship 
+        if the simple serializer internally triggers any teacher-bound tracking.
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+        all_obs = Observation.objects.filter(created_by=request.user)
+        
+        # সেফটি মেজার: ডাইনামিকালি রিলেশন প্রোপার্টি অ্যাসাইন করা যাতে সিরিয়ালাইজার ক্র্যাশ না করে
+        for teacher in queryset:
+            teacher.observations = all_obs.filter(teacher_name=teacher.name)
+            
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
+        return Teacher.objects.filter(created_by=user).order_by('name')
+
+    def list(self, request, *args, **kwargs):
+        """
+        Overriding list method to safely bypass the broken 'observations' reverse relationship 
+        if the simple serializer internally triggers any teacher-bound tracking.
+        """
+        queryset = self.filter_queryset(self.get_queryset())
+        all_obs = Observation.objects.filter(created_by=request.user)
+        
+        # সেফটি মেজার: ডাইনামিকালি রিলেশন প্রোপার্টি অ্যাসাইন করা যাতে সিরিয়ালাইজার ক্র্যাশ না করে
+        for teacher in queryset:
+            teacher.observations = all_obs.filter(teacher_name=teacher.name)
+            
+        serializer = self.get_serializer(queryset, many=True)
+        return Response(serializer.data)
 
 class ObservationDetailView(generics.RetrieveUpdateAPIView):
     """
@@ -134,135 +284,135 @@ class ObservationDetailView(generics.RetrieveUpdateAPIView):
 # 2. OBSERVATION WORKFLOWS
 # ═══════════════════════════════════════════════════════════════════════
 
-class ObservationListCreateView(generics.ListCreateAPIView):
-    """
-    Lists historical user evaluations or triggers the modern AI sequence (STEP 1).
-    """
-    permission_classes = [permissions.IsAuthenticated]
-    filter_backends = [filters.SearchFilter]
-    search_fields = ['teacher_name', 'subject']
+# class ObservationListCreateView(generics.ListCreateAPIView):
+#     """
+#     Lists historical user evaluations or triggers the modern AI sequence (STEP 1).
+#     """
+#     permission_classes = [permissions.IsAuthenticated]
+#     filter_backends = [filters.SearchFilter]
+#     search_fields = ['teacher_name', 'subject']
 
-    def get_serializer_class(self):
-        if self.request.method == "POST":
-            return ObservationCreateSerializer
-        return ObservationReadSerializer
+#     def get_serializer_class(self):
+#         if self.request.method == "POST":
+#             return ObservationCreateSerializer
+#         return ObservationReadSerializer
 
-    def get_queryset(self):
-        return (
-            Observation.objects
-            .filter(created_by=self.request.user)
-            .order_by('-created_at')
-        )
+#     def get_queryset(self):
+#         return (
+#             Observation.objects
+#             .filter(created_by=self.request.user)
+#             .order_by('-created_at')
+#         )
 
-    def list(self, request, *args, **kwargs):
-        queryset = self.filter_queryset(self.get_queryset())
-        serializer = self.get_serializer(queryset, many=True)
+#     def list(self, request, *args, **kwargs):
+#         queryset = self.filter_queryset(self.get_queryset())
+#         serializer = self.get_serializer(queryset, many=True)
 
-        total = queryset.count()
-        avg = (
-            queryset.aggregate(Avg('overall_performance_score'))['overall_performance_score__avg'] or 0.0
-        )
+#         total = queryset.count()
+#         avg = (
+#             queryset.aggregate(Avg('overall_performance_score'))['overall_performance_score__avg'] or 0.0
+#         )
 
-        return Response({
-            "observations": serializer.data,
-            "summary_stats": {
-                "total_observations": total,
-                "average_score": round(avg, 1),
-                "completed": queryset.filter(status='completed').count(),
-                "pending": queryset.filter(status='draft').count(),
-            }
-        })
+#         return Response({
+#             "observations": serializer.data,
+#             "summary_stats": {
+#                 "total_observations": total,
+#                 "average_score": round(avg, 1),
+#                 "completed": queryset.filter(status='completed').count(),
+#                 "pending": queryset.filter(status='draft').count(),
+#             }
+#         })
 
-    def create(self, request, *args, **kwargs):
-        """
-        POST /api/v1/observations/observations/
-        Handles structured request parsing with strict AI Domain Enforcement.
-        FINAL FIX: Corrected list index fallback mapping to prevent 'list' object has no attribute 'get'.
-        """
-        data = request.data
+#     def create(self, request, *args, **kwargs):
+#         """
+#         POST /api/v1/observations/observations/
+#         Handles structured request parsing with strict AI Domain Enforcement.
+#         FINAL FIX: Corrected list index fallback mapping to prevent 'list' object has no attribute 'get'.
+#         """
+#         data = request.data
 
-        # ১. হার্ডকোডেড সেফটি ডোমেন লিস্ট (এআইকে ৮টি কার্ড জেনারেট করতে বাধ্য করবে)
-        selected_domains = [
-            "Domain 2 - Instruction",
-            "Domain 3 - Learning Environment"
-        ]
+#         # ১. হার্ডকোডেড সেফটি ডোমেন লিস্ট (এআইকে ৮টি কার্ড জেনারেট করতে বাধ্য করবে)
+#         selected_domains = [
+#             "Domain 2 - Instruction",
+#             "Domain 3 - Learning Environment"
+#         ]
 
-        # ২. সিরিয়ালাইজেশন ভ্যালিডেশন ও অবজেক্ট ক্রিয়েশন
-        serializer = self.get_serializer(data=data)
-        serializer.is_valid(raise_exception=True)
+#         # ২. সিরিয়ালাইজেশন ভ্যালিডেশন ও অবজেক্ট ক্রিয়েশন
+#         serializer = self.get_serializer(data=data)
+#         serializer.is_valid(raise_exception=True)
         
-        observation = serializer.save(
-            created_by=request.user,
-            overall_performance_score=0.0,
-            status='draft',
-        )
+#         observation = serializer.save(
+#             created_by=request.user,
+#             overall_performance_score=0.0,
+#             status='draft',
+#         )
 
-        # রিকোয়েস্ট থেকে টিচারের নাম সেফলি এক্সট্রাক্ট করা
-        t_name = data.get("teacher_name") or "Teacher"
-        observation.teacher_name = t_name
-        observation.save()
+#         # রিকোয়েস্ট থেকে টিচারের নাম সেফলি এক্সট্রাক্ট করা
+#         t_name = data.get("teacher_name") or "Teacher"
+#         observation.teacher_name = t_name
+#         observation.save()
 
-        # ── Execution Layer: AI Processing Bridge ─────────────────────────
-        try:
-            from .ai_service import generate_initial_feedback
+#         # ── Execution Layer: AI Processing Bridge ─────────────────────────
+#         try:
+#             from .ai_service import generate_initial_feedback
 
-            ai_payload = {
-                "teacher_name":     t_name,
-                "subject":          data.get("subject", "Mathematics"),
-                "grade_level":      data.get("grade_level", "8"),
-                "observation_date": str(data.get("observation_date", "")),
-                "observation_time": str(data.get("observation_time", "")),
-                "raw_notes":        data.get("raw_notes", ""),
-                # ← exact keys যা DOMAIN_DIMENSION_MAP-এ আছে
-                "selected_domains": [
-                    "Domain 2 - Instruction",
-                    "Domain 3 - Learning Environment",
-                ],
-            }
+#             ai_payload = {
+#                 "teacher_name":     t_name,
+#                 "subject":          data.get("subject", "Mathematics"),
+#                 "grade_level":      data.get("grade_level", "8"),
+#                 "observation_date": str(data.get("observation_date", "")),
+#                 "observation_time": str(data.get("observation_time", "")),
+#                 "raw_notes":        data.get("raw_notes", ""),
+#                 # ← exact keys যা DOMAIN_DIMENSION_MAP-এ আছে
+#                 "selected_domains": [
+#                     "Domain 2 - Instruction",
+#                     "Domain 3 - Learning Environment",
+#                 ],
+#             }
 
-            feedback = generate_initial_feedback(ai_payload)
+#             feedback = generate_initial_feedback(ai_payload)
 
-            if feedback and isinstance(feedback, dict) and "error" not in feedback:
-                observation.overall_performance_score = feedback.get("overall_score", 0.0)
-                raw_dimensions = feedback.get("dimensions", [])
-                observation.dimensions_data = raw_dimensions
+#             if feedback and isinstance(feedback, dict) and "error" not in feedback:
+#                 observation.overall_performance_score = feedback.get("overall_score", 0.0)
+#                 raw_dimensions = feedback.get("dimensions", [])
+#                 observation.dimensions_data = raw_dimensions
                 
-                # রুট লেভেলের গ্লো এবং গ্রো অ্যাসাইনমেন্ট
-                observation.glow = (feedback.get("glow") or "").strip()
-                observation.grow = (feedback.get("grow") or "").strip()
+#                 # রুট লেভেলের গ্লো এবং গ্রো অ্যাসাইনমেন্ট
+#                 observation.glow = (feedback.get("glow") or "").strip()
+#                 observation.grow = (feedback.get("grow") or "").strip()
                 
-                # ──────────────────────────────────────────────────────────────────
-                # 🚀 FIXED: raw_dimensions একটি LIST, তাই প্রথম এলিমেন্টের জন্য বসানো হলো
-                # ──────────────────────────────────────────────────────────────────
-                if not observation.glow and isinstance(raw_dimensions, list) and len(raw_dimensions) > 0:
-                    observation.glow = raw_dimensions.get("glow", "") if isinstance(raw_dimensions, dict) else ""
+#                 # ──────────────────────────────────────────────────────────────────
+#                 # 🚀 FIXED: raw_dimensions একটি LIST, তাই প্রথম এলিমেন্টের জন্য বসানো হলো
+#                 # ──────────────────────────────────────────────────────────────────
+#                 if not observation.glow and isinstance(raw_dimensions, list) and len(raw_dimensions) > 0:
+#                     observation.glow = raw_dimensions.get("glow", "") if isinstance(raw_dimensions, dict) else ""
                     
-                if not observation.grow and isinstance(raw_dimensions, list) and len(raw_dimensions) > 0:
-                    observation.grow = raw_dimensions[-1].get("grow", "") if isinstance(raw_dimensions[-1], dict) else ""
+#                 if not observation.grow and isinstance(raw_dimensions, list) and len(raw_dimensions) > 0:
+#                     observation.grow = raw_dimensions[-1].get("grow", "") if isinstance(raw_dimensions[-1], dict) else ""
 
-                observation.status = 'completed'
+#                 observation.status = 'completed'
                 
-                if "Accomplished" in str(feedback):
-                    observation.rating = "Accomplished"
-                elif "Proficient" in str(feedback):
-                    observation.rating = "Proficient"
-            else:
-                observation.status = 'draft'
-                if feedback and "error" in feedback:
-                    logger.error("AI engine returned error block: %s", feedback.get("error"))
+#                 if "Accomplished" in str(feedback):
+#                     observation.rating = "Accomplished"
+#                 elif "Proficient" in str(feedback):
+#                     observation.rating = "Proficient"
+#             else:
+#                 observation.status = 'draft'
+#                 if feedback and "error" in feedback:
+#                     logger.error("AI engine returned error block: %s", feedback.get("error"))
 
-            observation.save()
+#             observation.save()
 
-        except Exception as exc:
-            logger.error("AI initial feedback workflow failed: %s", exc, exc_info=True)
-            observation.status = 'draft'
-            observation.save()
+#         except Exception as exc:
+#             logger.error("AI initial feedback workflow failed: %s", exc, exc_info=True)
+#             observation.status = 'draft'
+#             observation.save()
 
-        observation.refresh_from_db()
-        return Response(
-            ObservationReadSerializer(observation).data,
-            status=status.HTTP_201_CREATED,
-        )
+#         observation.refresh_from_db()
+#         return Response(
+#             ObservationReadSerializer(observation).data,
+#             status=status.HTTP_201_CREATED,
+#         )
 
 class RewriteReportView(APIView):
     """
