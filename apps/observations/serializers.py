@@ -1,159 +1,182 @@
+# from rest_framework import serializers
+# from .models import Teacher, Observation
+
+# # =======================================================================
+# # 1. TEACHER SERIALIZERS
+# # =======================================================================
+
+# class TeacherSerializer(serializers.ModelSerializer):
+#     avg_score = serializers.FloatField(read_only=True)
+#     observations_count = serializers.IntegerField(source='obs_count', read_only=True)
+#     last_observation = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = Teacher
+#         fields = ['id', 'name', 'department', 'avg_score', 'observations_count', 'last_observation']
+#         read_only_fields = ['created_by']
+
+#     def get_last_observation(self, obj):
+#         # 'observations' related name ব্যবহার করে শেষ অবজেক্ট ট্র্যাক করা
+#         last_obs = obj.observations.order_by('-observation_date').first()
+#         if last_obs and last_obs.observation_date:
+#             return last_obs.observation_date.strftime("%B %d, %Y")
+#         return "No data"
+
+
+# class TeacherSimpleSerializer(serializers.ModelSerializer):
+#     class Meta:
+#         model = Teacher
+#         fields = ['id', 'name']
+
+
+# # =======================================================================
+# # 2. OBSERVATION SERIALIZERS (READ & CREATE FIXED Layers)
+# # =======================================================================
+
+# class ObservationReadSerializer(serializers.ModelSerializer):
+#     """
+#     Detailed view of an Observation for the UI.
+#     Maps flat database fields into structured objects for the frontend.
+#     """
+#     teacher_name = serializers.ReadOnlyField(source='teacher.name', default="Teacher")
+#     teacher_dept = serializers.ReadOnlyField(source='teacher.department', default="N/A")
+#     domain_scores = serializers.SerializerMethodField()
+
+#     class Meta:
+#         model = Observation
+#         fields = '__all__'  # সব কলাম (glow, grow, dimensions_data) সহ রিড হবে
+
+#     def to_representation(self, instance):
+#         """
+#         সিরিয়ালাইজার আউটপুটে Figma ডিজাইনের ডাইনামিক 'domain_scores' ইনজেক্ট করার সেফ মেথড
+#         """
+#         representation = super().to_representation(instance)
+#         representation['domain_scores'] = self.get_domain_scores(instance)
+#         return representation
+
+#     def get_domain_scores(self, obj):
+#         """Groups 8 sliders into Domain 2 and Domain 3 categories as per Figma."""
+#         return {
+#             "classroom_environment": {
+#                 "respect_env": getattr(obj, 'respect_env_score', 0.0) or 0.0,
+#                 "culture": getattr(obj, 'culture_learning_score', 0.0) or 0.0,
+#                 "procedures": getattr(obj, 'classroom_proc_score', 0.0) or 0.0,
+#                 "behavior": getattr(obj, 'student_behavior_score', 0.0) or 0.0
+#             },
+#             "instruction": {
+#                 "communication": getattr(obj, 'comm_students_score', 0.0) or 0.0,
+#                 "questioning": getattr(obj, 'questioning_score', 0.0) or 0.0,
+#                 "engagement": getattr(obj, 'engaging_students_score', 0.0) or 0.0,
+#                 "assessment": getattr(obj, 'assessment_score', 0.0) or 0.0
+#             }
+#         }
+
+
+# class ObservationCreateSerializer(serializers.ModelSerializer):
+#     """
+#     Handles POST requests for new observations.
+#     CRITICAL FIX: Explicitly ignore non-model input parameters during DB write maps.
+#     """
+#     # ওয়ান-ওয়ে ট্র্যাক সেট করা হলো যেন ডাটাবেজ কলাম মনে করে ক্র্যাশ না করে
+#     teacher_name = serializers.CharField(read_only=True, required=False)
+#     selected_domains = serializers.JSONField(write_only=True, required=False)
+
+#     class Meta:
+#         model = Observation
+#         fields = '__all__'
+#         read_only_fields = ['created_by', 'overall_performance_score']
+
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+#         # মেটা ডিকশনারি ভ্যালিডেশনের আগে selected_domains ফিল্ডটি ডাইনামিকালি ম্যাপে ইনজেক্ট করা হলো
+#         self.fields['selected_domains'] = serializers.JSONField(write_only=True, required=False)
+
+#     def create(self, validated_data):
+#         # ডাটাবেজে অবজেক্ট ক্রিয়েট করার ঠিক আগ মুহূর্তে নন-মডেল ফিল্ডগুলো পপ করে ড্রপ করা হলো
+#         validated_data.pop('teacher_name', None)
+#         validated_data.pop('selected_domains', None)
+#         return super().create(validated_data) 
+
+
 from rest_framework import serializers
 from .models import Teacher, Observation
-from django.db.models import Avg
-from django.db.models.functions import TruncMonth
-from rest_framework.views import APIView
-from rest_framework.permissions import IsAuthenticated
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# 1. TEACHER SERIALIZERS
+# ═══════════════════════════════════════════════════════════════════════
 
 class TeacherSerializer(serializers.ModelSerializer):
-    # Annotate kora field gulo ke read_only hisebe define korun
-    avg_score = serializers.FloatField(read_only=True)
+    avg_score          = serializers.FloatField(read_only=True)
     observations_count = serializers.IntegerField(source='obs_count', read_only=True)
-    last_observation = serializers.SerializerMethodField()
+    last_observation   = serializers.SerializerMethodField()
 
     class Meta:
-        model = Teacher
-        # 'created_by' field ti list e dorkar na holeo model e thakte hobe 
-        # kintu seta read_only hobe
-        fields = ['id', 'name', 'department', 'avg_score', 'observations_count', 'last_observation']
+        model        = Teacher
+        fields       = ['id', 'name', 'department', 'avg_score', 'observations_count', 'last_observation']
         read_only_fields = ['created_by']
 
     def get_last_observation(self, obj):
-        # 'observations' as the related name from your FieldError context
         last_obs = obj.observations.order_by('-observation_date').first()
         if last_obs and last_obs.observation_date:
             return last_obs.observation_date.strftime("%B %d, %Y")
         return "No data"
 
+
 class TeacherSimpleSerializer(serializers.ModelSerializer):
     class Meta:
-        model = Teacher
+        model  = Teacher
         fields = ['id', 'name']
 
+
+# ═══════════════════════════════════════════════════════════════════════
+# 2. OBSERVATION SERIALIZERS
+# ═══════════════════════════════════════════════════════════════════════
+
 class ObservationReadSerializer(serializers.ModelSerializer):
     """
-    Detailed view of an Observation for the UI.
-    Maps flat database fields into structured objects for the frontend.
+    Clean observation response — only fields the app actually needs.
     """
-    teacher_name = serializers.ReadOnlyField(source='teacher.name')
-    teacher_dept = serializers.ReadOnlyField(source='teacher.department')
-    domain_scores = serializers.SerializerMethodField()
-
     class Meta:
-        model = Observation
-        # এখানে সব ফিল্ড থাকতে হবে, বিশেষ করে glow এবং grow
+        model  = Observation
         fields = [
-            'id', 'teacher_name', 'teacher_dept', 'subject', 'grade_level', 
-            'observation_date', 'observation_time', 'overall_performance_score', 
-            'domain_scores', 'glow', 'grow', 'dimensions_data', 'status', 'created_at',
-            'raw_notes', 'rating'
+            'id',
+            'teacher_name',
+            'subject',
+            'grade_level',
+            'observation_date',
+            'observation_time',
+            'domain_2_selected',
+            'domain_3_selected',
+            'raw_notes',
+            'overall_performance_score',
+            'rating',
+            'status',
+            'glow',
+            'grow',
+            'dimensions_data',
+            'created_at',
+            'updated_at',
+            'created_by',
         ]
 
-    def get_domain_scores(self, obj):
-        """Groups 8 sliders into Domain 2 and Domain 3 as per Figma."""
-        return {
-            "classroom_environment": {
-                "respect_env": obj.respect_env_score,
-                "culture": obj.culture_learning_score,
-                "procedures": obj.classroom_proc_score,
-                "behavior": obj.student_behavior_score
-            },
-            "instruction": {
-                "communication": obj.comm_students_score,
-                "questioning": obj.questioning_score,
-                "engagement": obj.engaging_students_score,
-                "assessment": obj.assessment_score
-            }
-        } 
-
-class ObservationReadSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = Observation
-        fields = '__all__' # যাতে dimensions_data, glow, grow সব আসে
 
 class ObservationCreateSerializer(serializers.ModelSerializer):
     """
-    Handles POST requests for new observations.
-    Accepts all fields from the 2-page form.
+    Handles POST requests.
+    selected_domains is write-only — used for AI only, not saved to DB.
     """
+    selected_domains = serializers.JSONField(write_only=True, required=False)
+
     class Meta:
-        model = Observation
-        fields = '__all__'
+        model        = Observation
+        fields       = '__all__'
         read_only_fields = ['created_by', 'overall_performance_score']
 
-class DomainAnalyticsView(APIView):
-    permission_classes = [IsAuthenticated]
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['selected_domains'] = serializers.JSONField(write_only=True, required=False)
 
-    def get(self, request):
-        # 1. Fetch all completed observations for the current observer
-        queryset = Observation.objects.filter(observer=request.user, status='completed').order_by('observation_date')
-        
-        if not queryset.exists():
-            return Response({"message": "No data available yet."}, status=200)
-
-        # --- Dynamic Domain Calculation Logic ---
-        env_averages = []
-        ins_averages = []
-        radar_env = {"Respect": 0, "Culture": 0, "Procedures": 0, "Behavior": 0}
-        radar_ins = {"Communication": 0, "Questioning": 0, "Engagement": 0, "Assessment": 0}
-
-        for obs in queryset:
-            scores = obs.domain_scores # Accessing the JSONField
-            
-            # Processing Classroom Environment
-            env = scores.get('classroom_environment', {})
-            if env:
-                avg = sum(env.values()) / len(env)
-                env_averages.append(avg)
-                for key in radar_env: radar_env[key] += env.get(key.lower(), 0)
-
-            # Processing Instruction
-            ins = scores.get('instruction', {})
-            if ins:
-                avg = sum(ins.values()) / len(ins)
-                ins_averages.append(avg)
-                for key in radar_ins: radar_ins[key] += ins.get(key.lower(), 0)
-
-        # Final average scores for cards
-        total_obs = queryset.count()
-        avg_env_final = round(sum(env_averages) / len(env_averages), 1) if env_averages else 0
-        avg_ins_final = round(sum(ins_averages) / len(ins_averages), 1) if ins_averages else 0
-
-        # Radar data average (sum of scores / total observations)
-        for key in radar_env: radar_env[key] = round(radar_env[key] / total_obs, 1)
-        for key in radar_ins: radar_ins[key] = round(radar_ins[key] / total_obs, 1)
-
-        # --- Dynamic Comparison Chart (Monthly) ---
-        monthly_stats = queryset.annotate(
-            month=TruncMonth('observation_date')
-        ).values('month').annotate(
-            avg_score=Avg('overall_performance_score')
-        ).order_by('month')
-
-        comparison_chart = []
-        for entry in monthly_stats:
-            comparison_chart.append({
-                "month": entry['month'].strftime("%b"),
-                "domain_2": round(entry['avg_score'], 1), # Classroom Avg for that month
-                "domain_3": round(entry['avg_score'] * 0.9, 1) # Comparative average
-            })
-
-        # --- Final Dynamic Response Construction ---
-        return Response({
-            "domain_analytics": {
-                "classroom_environment": {
-                    "average_score": avg_env_final,
-                    "highest_area": max(radar_env, key=radar_env.get) + f" ({max(radar_env.values())})",
-                    "lowest_area": min(radar_env, key=radar_env.get) + f" ({min(radar_env.values())})",
-                    "radar_data": radar_env
-                },
-                "instruction": {
-                    "average_score": avg_ins_final,
-                    "highest_area": max(radar_ins, key=radar_ins.get) + f" ({max(radar_ins.values())})",
-                    "lowest_area": min(radar_ins, key=radar_ins.get) + f" ({min(radar_ins.values())})",
-                    "radar_data": radar_ins
-                }
-            },
-            "comparison_chart": comparison_chart
-        })
+    def create(self, validated_data):
+        validated_data.pop('selected_domains', None)
+        return super().create(validated_data)
