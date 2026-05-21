@@ -41,6 +41,7 @@ import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # ---------------------------------------------------------------------------
 # Path bootstrap
@@ -585,17 +586,17 @@ def _call_openai(system: str, user: str) -> str:
 
     logger.info("Calling OpenAI (gpt-4o)")
     response = client.chat.completions.create(
-        model="gpt-4o",
+        model="gpt-4.1",
         messages=[
             {"role": "system", "content": system},
             {"role": "user",   "content": user},
         ],
-        max_tokens=16000,
+        max_tokens=4096,
         temperature=0.2,
         response_format={"type": "json_object"},
     )
 
-    choice = response.choices[0]
+    choice = response.choices[0]  
     finish_reason = choice.finish_reason
     logger.info("OpenAI finish_reason: %s", finish_reason)
     return choice.message.content or ""
@@ -634,7 +635,69 @@ def generate_coaching_result(data: ObservationData) -> CoachingResult:
         if content.endswith("```"):
             content = content[:-3].strip()
 
-    return _parse_response(content, data)
+    return _parse_response(content, data) 
+
+#   15 seconds response 
+# def _call_openai_for_domain(data: ObservationData, domain: str) -> dict[str, Any]:
+#     """Call OpenAI for a single domain and return the parsed payload dict."""
+#     single_domain_data = ObservationData(
+#         teacher_name=data.teacher_name,
+#         subject=data.subject,
+#         grade_level=data.grade_level,
+#         date=data.date,
+#         time=data.time,
+#         observation_notes=data.observation_notes,
+#         selected_domains=[domain],
+#     )
+#     user_prompt = _build_user_prompt(single_domain_data)
+#     raw_content = _call_openai(_SYSTEM_PROMPT, user_prompt)
+ 
+#     content = raw_content.strip()
+#     if content.startswith("```"):
+#         content = content.split("```", 2)[-1] if content.count("```") >= 2 else content
+#         content = content.lstrip("json").strip()
+#         if content.endswith("```"):
+#             content = content[:-3].strip()
+ 
+#     return json.loads(content) 
+# def generate_coaching_result(data: ObservationData) -> CoachingResult:
+#     """
+#     Validate observation data, call OpenAI in parallel per domain, and return a CoachingResult.
+#     AI autonomously assigns ratings based only on observation evidence.
+#     """
+#     if not data.teacher_name or not data.teacher_name.strip():
+#         raise ValueError("Teacher name is required.")
+#     if not data.observation_notes or len(data.observation_notes.strip()) < 30:
+#         raise ValueError(
+#             "Observation notes must be at least 30 characters to generate meaningful AI feedback."
+#         )
+#     if not data.selected_domains:
+#         raise ValueError("Please select at least one domain to evaluate.")
+ 
+#     logger.info("Calling OpenAI in parallel for teacher=%s, domains=%s", data.teacher_name, data.selected_domains)
+ 
+#     summary = ""
+#     all_raw_dims: list[dict] = []
+ 
+#     # Fire one API call per selected domain concurrently
+#     with ThreadPoolExecutor(max_workers=len(data.selected_domains)) as executor:
+#         future_to_domain = {
+#             executor.submit(_call_openai_for_domain, data, domain): domain
+#             for domain in data.selected_domains
+#         }
+#         for future in as_completed(future_to_domain):
+#             domain = future_to_domain[future]
+#             try:
+#                 payload = future.result()
+#             except Exception as exc:
+#                 raise ValueError(f"AI call failed for domain '{domain}': {exc}") from exc
+ 
+#             # Use the summary from whichever domain finishes first
+#             if not summary:
+#                 summary = payload.get("raw_notes_summary", "").strip()
+ 
+#             all_raw_dims.extend(payload.get("dimensions", []))
+#             logger.debug("Received %d dimensions for domain '%s'", len(payload.get("dimensions", [])), domain) 
 
 def rewrite_coaching_result(
     result: CoachingResult,
