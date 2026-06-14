@@ -158,41 +158,65 @@ class InvoiceListView(APIView):
 
 # @csrf_exempt
 # def stripe_webhook(request):
-#     payload = request.body
+#     payload    = request.body
 #     sig_header = request.META.get('HTTP_STRIPE_SIGNATURE', '')
+
 #     try:
 #         event = stripe.Webhook.construct_event(
 #             payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
 #         )
 #     except Exception as e:
-#         logger.error(f"Webhook Signature Error: {e}")
+#         logger.error("Webhook signature error: %s", e)
 #         return HttpResponse(status=400)
 
-#     data = event['data']['object']
-#     if event['type'] == 'checkout.session.completed' or event['type'] == 'invoice.payment_succeeded':
+#     event_type = event['type']
+#     # StripeObject → raw dict
+#     raw_data = event['data']['object']
+#     data = raw_data if isinstance(raw_data, dict) else dict(raw_data)
+
+#     logger.info("Webhook: %s", event_type)
+
+#     if event_type in ('checkout.session.completed', 'invoice.paid'):
 #         _activate_pro(data)
-    
+
 #     return HttpResponse(status=200)
 
 
 # def _activate_pro(session):
-#     user_id = getattr(session, 'client_reference_id', None)
-#     if not user_id:
-#         metadata = getattr(session, 'metadata', {})
-#         user_id = metadata.get('user_id')
+#     # StripeObject → dict convert করতে হবে
+#     if hasattr(session, '_data'):
+#         session = dict(session._data)
+#     elif hasattr(session, 'to_dict'):
+#         session = session.to_dict()
 
-#     if user_id:
-#         try:
-#             user = User.objects.get(pk=user_id)
-#             sub, _ = Subscription.objects.get_or_create(user=user)
-#             sub.plan_type = 'professional'
-#             sub.status = 'active'
-#             sub.pro_end_date = timezone.now() + timedelta(days=30)
-#             sub.save()
-#             return True
-#         except Exception as e:
-#             logger.error(f"Error activating pro: {e}")
-#     return False  
+#     user_id = (
+#         session.get('client_reference_id')
+#         or (session.get('metadata') or {}).get('user_id')
+#     )
+
+#     logger.info("_activate_pro: user_id=%s", user_id)
+
+#     if not user_id:
+#         logger.error("No user_id in webhook: %s", session)
+#         return False
+
+#     try:
+#         user = User.objects.get(pk=user_id)
+#         sub, _ = Subscription.objects.get_or_create(user=user)
+#         sub.plan_type              = 'professional'
+#         sub.status                 = 'active'
+#         sub.stripe_subscription_id = session.get('subscription')
+#         sub.stripe_customer_id     = session.get('customer')
+#         sub.pro_end_date           = timezone.now() + timedelta(days=30)
+#         sub.save()
+#         logger.info("Pro activated: user=%s", user.email)
+#         return True
+#     except User.DoesNotExist:
+#         logger.error("User not found: pk=%s", user_id)
+#     except Exception as e:
+#         logger.error("_activate_pro error: %s", e)
+#     return False
+
 
 
 @csrf_exempt
@@ -209,28 +233,38 @@ def stripe_webhook(request):
         return HttpResponse(status=400)
 
     event_type = event['type']
-    # StripeObject → raw dict
     raw_data = event['data']['object']
-    data = raw_data if isinstance(raw_data, dict) else dict(raw_data)
+    
+    # StripeObject কে নিরাপদে deep dict এ রূপান্তর করার সঠিক নিয়ম
+    if hasattr(raw_data, 'to_dict_deep'):
+        data = raw_data.to_dict_deep()
+    elif hasattr(raw_data, 'to_dict'):
+        data = raw_data.to_dict()
+    else:
+        data = dict(raw_data)
 
     logger.info("Webhook: %s", event_type)
 
-    if event_type in ('checkout.session.completed', 'invoice.paid'):
+    # টেস্ট এবং লাইভ উভয় ক্ষেত্রে এই ৩টি ইভেন্ট হ্যান্ডেল করা নিরাপদ
+    if event_type in ('checkout.session.completed', 'invoice.paid', 'invoice.payment_succeeded'):
         _activate_pro(data)
 
     return HttpResponse(status=200)
 
 
 def _activate_pro(session):
-    # StripeObject → dict convert করতে হবে
-    if hasattr(session, '_data'):
-        session = dict(session._data)
+    # ডাবল সেফটি চেক: ডাটা ডিকশনারি না হলে রূপান্তর করে নেওয়া
+    if hasattr(session, 'to_dict_deep'):
+        session = session.to_dict_deep()
     elif hasattr(session, 'to_dict'):
         session = session.to_dict()
+    elif not isinstance(session, dict):
+        session = dict(session)
 
+    # ডাটা থেকে নিরাপদে user_id বের করা
     user_id = (
         session.get('client_reference_id')
-        or (session.get('metadata') or {}).get('user_id')
+        or session.get('metadata', {}).get('user_id')
     )
 
     logger.info("_activate_pro: user_id=%s", user_id)
@@ -255,4 +289,3 @@ def _activate_pro(session):
     except Exception as e:
         logger.error("_activate_pro error: %s", e)
     return False
-
