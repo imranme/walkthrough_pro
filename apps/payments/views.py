@@ -205,66 +205,54 @@ def stripe_webhook(request):
             payload, sig_header, settings.STRIPE_WEBHOOK_SECRET
         )
     except Exception as e:
-        logger.error("Webhook error: %s", e)
+        logger.error("Webhook signature error: %s", e)
         return HttpResponse(status=400)
 
     event_type = event['type']
-    data       = event['data']['object']   # ← এটি ডিকশনারি (dict)
+    # StripeObject → raw dict
+    raw_data = event['data']['object']
+    data = raw_data if isinstance(raw_data, dict) else dict(raw_data)
 
-    logger.info("Stripe webhook received: %s", event_type)
+    logger.info("Webhook: %s", event_type)
 
-    if event_type == 'checkout.session.completed':
-        _activate_pro(data)
-    elif event_type == 'invoice.paid':           # ← ফিক্সড ইভেন্ট নেম
+    if event_type in ('checkout.session.completed', 'invoice.paid'):
         _activate_pro(data)
 
     return HttpResponse(status=200)
 
 
 def _activate_pro(session):
-    # ১. প্রথমে ডিকশনারি থেকে user_id রিড করার চেষ্টা (Checkout Session এর জন্য)
+    # StripeObject → dict convert করতে হবে
+    if hasattr(session, '_data'):
+        session = dict(session._data)
+    elif hasattr(session, 'to_dict'):
+        session = session.to_dict()
+
     user_id = (
         session.get('client_reference_id')
         or (session.get('metadata') or {}).get('user_id')
     )
-    customer_id = session.get('customer') # স্ট্রাইপ কাস্টমার আইডি (cus_xxxx)
-    user = None
 
-    # ২. user_id পাওয়া গেলে pk দিয়ে ইউজার খোঁজা
-    if user_id:
-        try:
-            user = User.objects.get(pk=user_id)
-        except User.DoesNotExist:
-            logger.error("User not found by pk: %s", user_id)
+    logger.info("_activate_pro: user_id=%s", user_id)
 
-    # ৩. ইনভয়েস ইভেন্টের জন্য ফিক্স: user_id না থাকলে কাস্টমার আইডি দিয়ে ইউজার খোঁজা
-    if not user and customer_id:
-        sub_obj = Subscription.objects.filter(stripe_customer_id=customer_id).first()
-        if sub_obj:
-            user = sub_obj.user
-            logger.info("User found via stripe_customer_id: %s", user.email)
-
-    # ৪. ইউজার ট্র্যাক না করা গেলে রিটার্ন ফলস
-    if not user:
-        logger.error("No user found or mapped for webhook session. user_id=%s, customer_id=%s", user_id, customer_id)
+    if not user_id:
+        logger.error("No user_id in webhook: %s", session)
         return False
 
-    # ৫. ডাটাবেজ আপডেট (আপনার নিজস্ব কোড)
     try:
+        user = User.objects.get(pk=user_id)
         sub, _ = Subscription.objects.get_or_create(user=user)
         sub.plan_type              = 'professional'
         sub.status                 = 'active'
-        
-        if session.get('subscription'):
-            sub.stripe_subscription_id = session.get('subscription')
-        if customer_id:
-            sub.stripe_customer_id     = customer_id
-            
+        sub.stripe_subscription_id = session.get('subscription')
+        sub.stripe_customer_id     = session.get('customer')
         sub.pro_end_date           = timezone.now() + timedelta(days=30)
         sub.save()
         logger.info("Pro activated: user=%s", user.email)
         return True
+    except User.DoesNotExist:
+        logger.error("User not found: pk=%s", user_id)
     except Exception as e:
         logger.error("_activate_pro error: %s", e)
-        return False
+    return False
 
