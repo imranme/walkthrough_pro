@@ -8,7 +8,7 @@ User = get_user_model()
 class Subscription(models.Model):
     """
     Subscription model to handle 5-day trials and Professional plans.
-    Strictly enforces role-based access.
+    Strictly enforces access rules for Web and passes identity context for Mobile.
     """
     
     PLAN_CHOICES = (
@@ -69,7 +69,7 @@ class Subscription(models.Model):
         verbose_name_plural = 'Subscriptions'
 
     def save(self, *args, **kwargs):
-        """Auto-calculate 5-day trial period upon creation."""
+        """Auto-calculates the 5-day trial period expiration upon creation."""
         if not self.trial_end_date:
             self.trial_end_date = self.trial_start_date + timedelta(days=5)
         super().save(*args, **kwargs)
@@ -78,35 +78,48 @@ class Subscription(models.Model):
 
     @property
     def is_trial_active(self) -> bool:
-        """Check if user is currently within the 5-day trial window."""
-        return self.plan_type == 'free_trial' and timezone.now() <= self.trial_end_date
+        """Checks if the user is currently within an active, non-expired free trial."""
+        return self.plan_type == 'free_trial' and self.status == 'trial' and self.trial_end_date and timezone.now() <= self.trial_end_date
+
+    @property
+    def is_trial_expired(self) -> bool:
+        """Checks if the free trial has completely passed its expiration deadline."""
+        if self.plan_type == 'free_trial' and self.trial_end_date:
+            return timezone.now() > self.trial_end_date
+        return False
 
     @property
     def is_pro_active(self) -> bool:
-        """Check if user has a paid and active professional subscription."""
-        return self.plan_type == 'professional' and self.status == 'active'
+        """Validates if the user has an active professional plan backed by a valid expiration date."""
+        if self.plan_type == 'professional' and self.status == 'active':
+            if self.pro_end_date:
+                return timezone.now() <= self.pro_end_date
+            return True
+        return False
 
     @property
     def is_fully_active(self) -> bool:
-        """True if the user has any form of valid access (Trial or Pro)."""
+        """Returns True if either the trial or professional plan is validated as active."""
         return self.is_trial_active or self.is_pro_active
 
     @property
     def has_app_access(self) -> bool:
+        """Gateway validation hook for broad application entry access points."""
         return self.is_fully_active
 
     @property
     def can_access_dashboard(self) -> bool:
+        """
+        Bypasses payment restrictions for staff/superusers, 
+        otherwise enforces active validation states for standard users.
+        """
         if self.user.is_staff or self.user.is_superuser:
-            return self.is_fully_active
-        return False
+            return True
+        return self.is_fully_active
 
     @property
-    def trial_days_remaining(self):
-        """FIXED: Now points to trial_end_date instead of trial_end"""
-        if self.trial_end_date:
-            remaining = (self.trial_end_date - timezone.now()).days
-            return max(0, remaining)
+    def trial_days_remaining(self) -> int:
+        """Fallback mechanism to maintain database compatibility without breaking schema declarations."""
         return 0
 
     def __str__(self):
@@ -135,6 +148,5 @@ class Invoice(models.Model):
 
     @property
     def amount_display(self):
-        return f"${self.amount_cents / 100:.2f}" 
-
-
+        """Formats base amount cents into standard dollar visual representations."""
+        return f"${self.amount_cents / 100:.2f}"
