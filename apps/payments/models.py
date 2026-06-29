@@ -119,7 +119,10 @@ class Subscription(models.Model):
 
     @property
     def trial_days_remaining(self) -> int:
-        """Fallback mechanism to maintain database compatibility without breaking schema declarations."""
+        """কয়দিন ফ্রি ট্রায়াল বাকি আছে তা রিয়েল-টাইমে হিসাব করবে।"""
+        if self.is_trial_active and self.trial_end_date:
+            delta = self.trial_end_date - timezone.now()
+            return max(0, delta.days)
         return 0
 
     def __str__(self):
