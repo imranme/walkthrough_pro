@@ -141,29 +141,35 @@ class SubscriptionStatusView(APIView):
         # Calculate remaining subscription days dynamically
         # Calculate remaining subscription days dynamically
         days_left = 0
-        if sub.is_fully_active:
-            if sub.is_trial_active:
-                # ১. ট্রায়াল একটিভ থাকলে ট্রায়ালের বাকি দিন হিসাব করবে
-                days_left = getattr(sub, "trial_days_remaining", 0)
-            else:
-                # ২. ট্রায়াল একটিভ না থাকলে (অর্থাৎ পেইড সাবস্ক্রিপশন)
-                # প্রথমে স্ট্রাইপের রিয়েল এক্সপায়ারি ডেট চেক করবে
-                expiry_date = getattr(sub, "current_period_end", None) or getattr(
-                    sub, "expires_at", None
-                )
+if sub.is_fully_active:
+    if sub.is_trial_active and sub.trial_end_date:
+        delta = sub.trial_end_date - timezone.now()
+        days_left = max(0, delta.days)
 
-                # ৩. যদি স্ট্রাইপের রিয়েল ডেট থাকে, তবেই শুধু বিয়োগ করে হিসাব করবে
-                if expiry_date and expiry_date > timezone.now():
-                    days_left = (expiry_date - timezone.now()).days
+    elif sub.is_pro_active:
+        # pro_end_date আছে কিনা দেখো
+        if sub.pro_end_date and sub.pro_end_date > timezone.now():
+            delta = sub.pro_end_date - timezone.now()
+            days_left = max(0, delta.days)
+        else:
+            # pro_end_date নেই → Stripe থেকে আনো
+            try:
+                if sub.stripe_subscription_id:
+                    stripe_sub = stripe.Subscription.retrieve(
+                        sub.stripe_subscription_id
+                    )
+                    import datetime
+                    end_ts  = stripe_sub.current_period_end
+                    end_dt  = datetime.datetime.fromtimestamp(end_ts, tz=timezone.utc)
+                    # DB-তে save করো future calls-এর জন্য
+                    sub.pro_end_date = end_dt
+                    sub.save(update_fields=['pro_end_date'])
+                    delta    = end_dt - timezone.now()
+                    days_left = max(0, delta.days)
                 else:
-                    # 🎯 ম্যাজিক ফিক্স: স্ট্রাইপের রিয়েল এন্ড ডেট না থাকলে সরাসরি প্ল্যান টাইপ দেখে হার্ডকোডেড দিন বসাবে
-                    # এটি আপনার trial_end_date এর ভুল বা পুরানো ভ্যালু ইগনোর করবে
-                    if sub.plan_type == "professional":
-                        days_left = 30
-                    elif sub.plan_type == "yearly":
-                        days_left = 365
-                    else:
-                        days_left = 30
+                    days_left = 30  # fallback
+            except Exception:
+                days_left = 30  # fallback
 
         # Determine if the frontend should block/allow new checkouts
         can_purchase = not sub.is_fully_active
