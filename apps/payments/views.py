@@ -143,6 +143,49 @@ class SubscriptionStatusView(APIView):
 # 3. Stripe Checkout (Web)
 # ══════════════════════════════════════════════════════════════════════
 
+# class CreateCheckoutSessionView(APIView):
+#     """
+#     POST /api/v1/payments/create-checkout-session/
+#     Web only — Mobile uses RevenueCat In-App Purchase
+#     """
+#     permission_classes = [permissions.IsAuthenticated]
+
+#     def post(self, request):
+#         user = request.user
+#         try:
+#             sub         = getattr(user, 'subscription', None)
+#             customer_id = sub.stripe_customer_id if sub else None
+
+#             if not customer_id:
+#                 customer    = stripe.Customer.create(
+#                     email    = user.email,
+#                     name     = user.get_full_name() or user.username,
+#                     metadata = {"django_user_id": str(user.pk)},
+#                 )
+#                 customer_id = customer.id
+#                 if sub:
+#                     sub.stripe_customer_id = customer_id
+#                     sub.save(update_fields=['stripe_customer_id'])
+
+#             session = stripe.checkout.Session.create(
+#                 customer             = customer_id,
+#                 payment_method_types = ['card'],
+#                 line_items           = [{'price': settings.STRIPE_PRO_PRICE_ID, 'quantity': 1}],
+#                 mode                 = 'subscription',
+#                 success_url          = f"{settings.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
+#                 cancel_url           = f"{settings.FRONTEND_URL}/pricing?cancelled=true",
+#                 client_reference_id  = str(user.pk),
+#                 metadata             = {'user_id': str(user.pk)},
+#                 allow_promotion_codes = True,
+#             )
+#             return Response({"url": session.url, "session_id": session.id})
+
+#         except stripe.error.StripeError as exc:
+#             return Response({"error": str(exc)}, status=400)
+#         except Exception as exc:
+#             logger.error("Checkout session error: %s", exc)
+#             return Response({"error": "Internal error"}, status=500)
+
 class CreateCheckoutSessionView(APIView):
     """
     POST /api/v1/payments/create-checkout-session/
@@ -153,6 +196,19 @@ class CreateCheckoutSessionView(APIView):
     def post(self, request):
         user = request.user
         try:
+            # 1. Extract price_id or plan_type from request body
+            received_price_id = request.data.get('price_id')
+            requested_plan = request.data.get('plan_type', '').lower()
+
+            # 2. Assign the target price ID dynamically
+            if received_price_id:
+                target_price_id = received_price_id
+            elif requested_plan == 'yearly':
+                target_price_id = settings.STRIPE_YEARLY_PRICE_ID
+            else:
+                target_price_id = settings.STRIPE_PRO_PRICE_ID
+
+            # 3. Customer ID management logic
             sub         = getattr(user, 'subscription', None)
             customer_id = sub.stripe_customer_id if sub else None
 
@@ -167,10 +223,11 @@ class CreateCheckoutSessionView(APIView):
                     sub.stripe_customer_id = customer_id
                     sub.save(update_fields=['stripe_customer_id'])
 
+            # 4. Create Stripe checkout session using the target_price_id
             session = stripe.checkout.Session.create(
                 customer             = customer_id,
                 payment_method_types = ['card'],
-                line_items           = [{'price': settings.STRIPE_PRO_PRICE_ID, 'quantity': 1}],
+                line_items           = [{'price': target_price_id, 'quantity': 1}],
                 mode                 = 'subscription',
                 success_url          = f"{settings.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
                 cancel_url           = f"{settings.FRONTEND_URL}/pricing?cancelled=true",
@@ -185,8 +242,6 @@ class CreateCheckoutSessionView(APIView):
         except Exception as exc:
             logger.error("Checkout session error: %s", exc)
             return Response({"error": "Internal error"}, status=500)
-
-
 # ══════════════════════════════════════════════════════════════════════
 # 4. Verify Payment
 # ══════════════════════════════════════════════════════════════════════
