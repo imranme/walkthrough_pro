@@ -16,6 +16,7 @@ from datetime import timedelta
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
+from datetime import datetime
 
 from .models import Invoice, Subscription
 from .serializers import InvoiceSerializer
@@ -142,24 +143,27 @@ class SubscriptionStatusView(APIView):
         days_left = 0
         if sub.is_fully_active:
             if sub.is_trial_active:
+                # ১. ট্রায়াল একটিভ থাকলে ট্রায়ালের বাকি দিন হিসাব করবে
                 days_left = getattr(sub, "trial_days_remaining", 0)
             else:
-                # 1. Try to get Stripe's actual period end field from your model
+                # ২. ট্রায়াল একটিভ না থাকলে (অর্থাৎ পেইড সাবস্ক্রিপশন)
+                # প্রথমে স্ট্রাইপের রিয়েল এক্সপায়ারি ডেট চেক করবে
                 expiry_date = getattr(sub, "current_period_end", None) or getattr(
                     sub, "expires_at", None
                 )
 
-                # 2. Fallback: If current_period_end is missing, use trial_end_date as the baseline
-                if not expiry_date:
-                    expiry_date = getattr(sub, "trial_end_date", None)
-
-                # 3. Calculate days if we found any valid future date
+                # ৩. যদি স্ট্রাইপের রিয়েল ডেট থাকে, তবেই শুধু বিয়োগ করে হিসাব করবে
                 if expiry_date and expiry_date > timezone.now():
                     days_left = (expiry_date - timezone.now()).days
                 else:
-                    # 4. Hardcoded Safety Fallback based on your live response
-                    # If DB date fields are blank but plan is active, give them the standard period
-                    days_left = 30 if sub.plan_type == "professional" else 365
+                    # 🎯 ম্যাজিক ফিক্স: স্ট্রাইপের রিয়েল এন্ড ডেট না থাকলে সরাসরি প্ল্যান টাইপ দেখে হার্ডকোডেড দিন বসাবে
+                    # এটি আপনার trial_end_date এর ভুল বা পুরানো ভ্যালু ইগনোর করবে
+                    if sub.plan_type == "professional":
+                        days_left = 30
+                    elif sub.plan_type == "yearly":
+                        days_left = 365
+                    else:
+                        days_left = 30
 
         # Determine if the frontend should block/allow new checkouts
         can_purchase = not sub.is_fully_active
@@ -186,49 +190,6 @@ class SubscriptionStatusView(APIView):
 # ══════════════════════════════════════════════════════════════════════
 # 3. Stripe Checkout (Web)
 # ══════════════════════════════════════════════════════════════════════
-
-# class CreateCheckoutSessionView(APIView):
-#     """
-#     POST /api/v1/payments/create-checkout-session/
-#     Web only — Mobile uses RevenueCat In-App Purchase
-#     """
-#     permission_classes = [permissions.IsAuthenticated]
-
-#     def post(self, request):
-#         user = request.user
-#         try:
-#             sub         = getattr(user, 'subscription', None)
-#             customer_id = sub.stripe_customer_id if sub else None
-
-#             if not customer_id:
-#                 customer    = stripe.Customer.create(
-#                     email    = user.email,
-#                     name     = user.get_full_name() or user.username,
-#                     metadata = {"django_user_id": str(user.pk)},
-#                 )
-#                 customer_id = customer.id
-#                 if sub:
-#                     sub.stripe_customer_id = customer_id
-#                     sub.save(update_fields=['stripe_customer_id'])
-
-#             session = stripe.checkout.Session.create(
-#                 customer             = customer_id,
-#                 payment_method_types = ['card'],
-#                 line_items           = [{'price': settings.STRIPE_PRO_PRICE_ID, 'quantity': 1}],
-#                 mode                 = 'subscription',
-#                 success_url          = f"{settings.FRONTEND_URL}/payment/success?session_id={{CHECKOUT_SESSION_ID}}",
-#                 cancel_url           = f"{settings.FRONTEND_URL}/pricing?cancelled=true",
-#                 client_reference_id  = str(user.pk),
-#                 metadata             = {'user_id': str(user.pk)},
-#                 allow_promotion_codes = True,
-#             )
-#             return Response({"url": session.url, "session_id": session.id})
-
-#         except stripe.error.StripeError as exc:
-#             return Response({"error": str(exc)}, status=400)
-#         except Exception as exc:
-#             logger.error("Checkout session error: %s", exc)
-#             return Response({"error": "Internal error"}, status=500)
 
 class CreateCheckoutSessionView(APIView):
     """
@@ -348,15 +309,76 @@ class CancelSubscriptionView(APIView):
 # 5. Invoice List
 # ══════════════════════════════════════════════════════════════════════
 
-class InvoiceListView(generics.ListAPIView):
-    """GET /api/v1/payments/invoices/"""
-    serializer_class   = InvoiceSerializer
+class InvoiceListView(APIView):
+    """
+    GET /api/v1/payments/invoices/
+    """
+
     permission_classes = [permissions.IsAuthenticated]
 
-    def get_queryset(self):
-        return Invoice.objects.filter(user=self.request.user).order_by('-invoice_date')
+    def get(self, request):
+        user = request.user
 
+        try:
+            # 1. Safe extraction of subscription object
+            sub = getattr(user, "subscription", None)
+            if not sub:
+                return Response(
+                    {"message": "No subscription record found for this user."},
+                    status=status.HTTP_200_OK,
+                )
 
+            # 2. Dynamic check for customer ID fields (matches your exact model attribute)
+            customer_id = (
+                getattr(sub, "stripe_customer_id", None)
+                or getattr(sub, "customer_id", None)
+                or getattr(sub, "stripe_id", None)
+            )
+
+            # If no stripe customer reference is found in DB, return empty list gracefully
+            if not customer_id:
+                return Response(
+                    {"message": "No Stripe customer ID linked to this profile."},
+                    status=status.HTTP_200_OK,
+                )
+
+            # 3. Fetch from Stripe
+            invoices = stripe.Invoice.list(customer=customer_id, limit=10)
+
+            invoice_data = []
+            for inv in invoices.data:
+                invoice_data.append(
+                    {
+                        "id": inv.id,
+                        "number": inv.number,
+                        "amount_paid": inv.amount_paid / 100,
+                        "currency": inv.currency.upper(),
+                        "status": inv.status,
+                        "hosted_invoice_url": getattr(inv, "hosted_invoice_url", None),
+                        "invoice_pdf": getattr(inv, "invoice_pdf", None),
+                        "created_at": datetime.fromtimestamp(inv.created).strftime(
+                            "%Y-%m-%d"
+                        ),
+                    }
+                )
+
+            return Response(invoice_data, status=status.HTTP_200_OK)
+
+        except stripe.error.StripeError as exc:
+            return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
+        except Exception as exc:
+            # 🎯 এটি আপনার পাইথন রানিং টার্মিনালে আসল এররটি প্রিন্ট করবে
+            print("\n" + "=" * 50)
+            print(f"🎯 ACTUAL INVOICE ERROR: {str(exc)}")
+            print("=" * 50 + "\n")
+
+            return Response(
+                {
+                    "error": "Internal server configuration error.",
+                    "debug_message": str(exc),  # পোস্টম্যান ডেস্কেই এররটি দেখতে পাবেন
+                },
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            )
 # ══════════════════════════════════════════════════════════════════════
 # 6. Stripe Webhook (Web Platform)
 # ══════════════════════════════════════════════════════════════════════
