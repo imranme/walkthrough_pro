@@ -86,9 +86,10 @@ class SubscriptionStatusView(APIView):
     """
     GET /api/v1/payments/subscription/
 
-    Web frontend: is_fully_active দেখে payment wall দেখাবে
-    Mobile app: is_staff/superuser check করে RevenueCat bypass করবে
+    Web frontend: Uses is_fully_active, days_left, and can_purchase
+    Mobile app: Bypasses RevenueCat if is_staff/superuser
     """
+
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
@@ -96,48 +97,77 @@ class SubscriptionStatusView(APIView):
 
         # Superuser/Staff → always active, no payment needed
         if user.is_staff or user.is_superuser:
-            return Response({
-                "plan_type":        "staff",
-                "status":           "active",
-                "is_fully_active":  True,
-                "is_staff":          True,
-                "trial_days_remaining": 0,
-                "upgrade_url":      None,
-            })
+            return Response(
+                {
+                    "plan_type": "staff",
+                    "status": "active",
+                    "is_fully_active": True,
+                    "is_staff": True,
+                    "days_left": 9999,
+                    "can_purchase": False,
+                    "trial_days_remaining": 0,
+                    "upgrade_url": None,
+                }
+            )
 
         # Mobile → RevenueCat handles subscription
-        # শুধু user info দাও, RevenueCat SDK বাকিটা করবে
         if _is_mobile_request(request):
-            return Response({
-                "is_staff":        False,
-                "is_superuser":    False,
-                "revenuecat_user_id": str(user.pk),  # RevenueCat-এ user identify করতে
-                "email":           user.email,
-                "mobile_access":   "managed_by_revenuecat",
-            })
+            return Response(
+                {
+                    "is_staff": False,
+                    "is_superuser": False,
+                    "revenuecat_user_id": str(user.pk),
+                    "email": user.email,
+                    "mobile_access": "managed_by_revenuecat",
+                }
+            )
 
         # Web → Django subscription check
         try:
             sub = user.subscription
-        except Subscription.DoesNotExist:
-            return Response({
-                "plan_type":       None,
-                "status":          "no_subscription",
-                "is_fully_active": False,
-                "upgrade_url":     "https://walkthroughpro.app/pricing",
-            })
+        except Exception:  # Catches DoesNotExist securely
+            return Response(
+                {
+                    "plan_type": "free",
+                    "status": "no_subscription",
+                    "is_fully_active": False,
+                    "days_left": 0,
+                    "can_purchase": True,
+                    "upgrade_url": "https://walkthroughpro.app/pricing",
+                }
+            )
 
-        return Response({
-            "plan_type":            sub.plan_type,
-            "status":               sub.status,
-            "is_fully_active":      sub.is_fully_active,
-            "is_trial_active":      sub.is_trial_active,
-            "is_pro_active":        sub.is_pro_active,
-            "trial_days_remaining": sub.trial_days_remaining,
-            "trial_end_date":       sub.trial_end_date,
-            "upgrade_url":          None if sub.is_fully_active else "https://walkthroughpro.app/pricing",
-        })
+        # Calculate remaining subscription days dynamically if fully active
+        days_left = 0
+        if sub.is_fully_active:
+            if sub.is_trial_active:
+                days_left = getattr(sub, "trial_days_remaining", 0)
+            else:
+                expiry_date = getattr(sub, "current_period_end", None)
+                if expiry_date and expiry_date > timezone.now():
+                    days_left = (expiry_date - timezone.now()).days
 
+        # Determine if the frontend should block/allow new checkouts
+        can_purchase = not sub.is_fully_active
+
+        return Response(
+            {
+                "plan_type": sub.plan_type,
+                "status": sub.status,
+                "is_fully_active": sub.is_fully_active,
+                "is_trial_active": sub.is_trial_active,
+                "is_pro_active": sub.is_pro_active,
+                "trial_days_remaining": sub.trial_days_remaining,
+                "trial_end_date": sub.trial_end_date,
+                "days_left": days_left,
+                "can_purchase": can_purchase,
+                "upgrade_url": (
+                    None
+                    if sub.is_fully_active
+                    else "https://walkthroughpro.app/pricing"
+                ),
+            }
+        )
 
 # ══════════════════════════════════════════════════════════════════════
 # 3. Stripe Checkout (Web)
