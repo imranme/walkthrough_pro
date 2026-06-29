@@ -138,23 +138,27 @@ class SubscriptionStatusView(APIView):
             )
 
         # Calculate remaining subscription days dynamically
+        # Calculate remaining subscription days dynamically
         days_left = 0
         if sub.is_fully_active:
             if sub.is_trial_active:
                 days_left = getattr(sub, "trial_days_remaining", 0)
             else:
-                # Fallback attributes checking (current_period_end OR expires_at)
+                # 1. Try to get Stripe's actual period end field from your model
                 expiry_date = getattr(sub, "current_period_end", None) or getattr(
                     sub, "expires_at", None
                 )
 
+                # 2. Fallback: If current_period_end is missing, use trial_end_date as the baseline
+                if not expiry_date:
+                    expiry_date = getattr(sub, "trial_end_date", None)
+
+                # 3. Calculate days if we found any valid future date
                 if expiry_date and expiry_date > timezone.now():
                     days_left = (expiry_date - timezone.now()).days
-                elif getattr(sub, "trial_end_date", None) and sub.plan_type == "yearly":
-                    # If yearly fallback simulation is needed based on start or end parameters
-                    days_left = 365
                 else:
-                    # Default active period safe buffer display if date field is temporarily missing
+                    # 4. Hardcoded Safety Fallback based on your live response
+                    # If DB date fields are blank but plan is active, give them the standard period
                     days_left = 30 if sub.plan_type == "professional" else 365
 
         # Determine if the frontend should block/allow new checkouts
