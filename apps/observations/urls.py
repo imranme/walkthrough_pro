@@ -3,6 +3,7 @@ from .views import (
     TeacherListCreateView, 
     ObservationListCreateView, 
     ObservationDetailView,
+    RewriteReportView,
     DashboardStatsView,
     RecentObservationsView,
     DomainAnalyticsView,
@@ -17,9 +18,12 @@ urlpatterns = [
     # Teacher Management
     path('teachers/', TeacherListCreateView.as_view(), name='teacher-list-create'),
 
-    # Observation Management (এটাই এখন মেইন এপিআই, যেখানে AI কাজ করবে)
+    # Observation Management 
     path('observations/', ObservationListCreateView.as_view(), name='observation-list-create'),
     path('observations/<int:pk>/', ObservationDetailView.as_view(), name='observation-detail'),
+    path('observations/<int:pk>/rewrite/', RewriteReportView.as_view(), name='observation-rewrite'),
+   
+
     # Analytics & Graphs
     path('analytics/', DomainAnalyticsView.as_view(), name='domain-analytics'),
     

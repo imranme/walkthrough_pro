@@ -1,95 +1,167 @@
-import logging
-import sys
-from pathlib import Path
-from app.components.generator import ObservationData, generate_coaching_result
+"""
+apps/observations/ai_service.py
+────────────────────────────────
+STEP 1 → generate_initial_feedback()   (Form Submission)
+STEP 2 → rewrite_feedback()            (After Rating Adjustments)
+"""
 
+import logging
 logger = logging.getLogger(__name__)
 
-# ১. পাথ সেটআপ
-CURRENT_FILE = Path(__file__).resolve()
-ROOT_DIR = CURRENT_FILE.parent.parent.parent
-if str(ROOT_DIR) not in sys.path:
-    sys.path.insert(0, str(ROOT_DIR))
 
-class ObservationAIService:
-    @staticmethod
-    def get_ai_feedback(observation_data=None, ratings=None, extra_data=None, **kwargs):
-        """
-        এখানে **kwargs যোগ করা হয়েছে যাতে 'raw_notes' বা অন্য যেকোনো 
-        unexpected keyword argument আসলেও এরর না দেয়।
-        """
-        # যদি ভিউ থেকে সরাসরি raw_notes পাঠানো হয়, সেটাকে ডিকশনারিতে নিয়ে নেওয়া
-        data = observation_data if isinstance(observation_data, dict) else {}
-        
-        # যদি আর্গুমেন্ট হিসেবে raw_notes আলাদাভাবে আসে (যা তোমার এরর বলছে)
-        if 'raw_notes' in kwargs:
-            data['raw_notes'] = kwargs['raw_notes']
-        
-        if extra_data:
-            data.update(extra_data)
-
-        return generate_feedback(data)
-
-def generate_feedback(observation_data: dict) -> dict:
-    """
-    আসল AI জেনারেটর লজিক (যা তোমার app.components কল করবে)
-    """
+def generate_initial_feedback(observation_data: dict) -> dict:
     try:
-        from app.components.generator import ObservationData, generate_coaching_result
-        
-        # ডাটা ম্যাপিং
-        obs = ObservationData(
-            teacher_name      = observation_data.get("teacher_name", "Teacher"),
-            subject           = observation_data.get("subject", "Math"),
-            grade_level       = observation_data.get("grade_level", "7"),
-            date              = str(observation_data.get("observation_date", "2026-04-27")),
-            time              = str(observation_data.get("observation_time", "09:30")),
-            observation_notes = observation_data.get("raw_notes", ""),
+        from app.components.generator import (
+            ObservationData,
+            generate_coaching_result,
+            DOMAIN_DIMENSION_MAP,
+        )
 
-            # টি-টেস স্কোরগুলো (ডিফল্ট ৩.০)
-            d2_creating_environment   = float(observation_data.get("respect_env", 3.0)),
-            d2_culture_for_learning   = float(observation_data.get("culture", 3.0)),
-            d2_classroom_procedures   = float(observation_data.get("procedures", 3.0)),
-            d2_student_behavior       = float(observation_data.get("behavior", 3.0)),
-            d3_communicating_students = float(observation_data.get("communication", 3.0)),
-            d3_questioning_discussion = float(observation_data.get("questioning", 3.0)),
-            d3_engaging_learning      = float(observation_data.get("engagement", 3.0)),
-            d3_assessment_instruction = float(observation_data.get("assessment", 3.0)),
+        raw_domains = observation_data.get("selected_domains", [])
+        matched_domains = [d for d in raw_domains if d in DOMAIN_DIMENSION_MAP]
+        if not matched_domains:
+            matched_domains = list(DOMAIN_DIMENSION_MAP.keys())
+
+        obs = ObservationData(
+            teacher_name      = observation_data.get("teacher_name", ""),
+            subject           = observation_data.get("subject", ""),
+            grade_level       = observation_data.get("grade_level", ""),
+            date              = str(observation_data.get("observation_date", "")),
+            time              = str(observation_data.get("observation_time", "")),
+            observation_notes = observation_data.get("raw_notes", ""),
+            selected_domains  = matched_domains,
         )
 
         result = generate_coaching_result(obs)
+        return _result_to_dict(result)
 
-        if not result:
-            raise ValueError("AI Generator returned None")
-
-        dimensions = []
-        if hasattr(result, 'dimensions'):
-            for d in result.dimensions:
-                dimensions.append({
-                    "dimension_id": getattr(d, 'dimension_id', "N/A"),
-                    "rating": getattr(d, 'rating', "N/A"),
-                    "coaching_feedback": getattr(d, 'coaching_feedback', ""),
-                    "growth_suggestion": getattr(d, 'growth_suggestion', ""),
-                })
-
+    except Exception as exc:
+        logger.error("AI initial feedback error: %s", exc, exc_info=True)
         return {
-            "overall_score": getattr(result, 'overall_score', 0.0),
-            "raw_notes_summary": getattr(result, 'raw_notes_summary', ""),
-            "glow": getattr(result, 'glow', "Well performed lesson."),
-            "grow": getattr(result, 'grow', "Focus on student-led transitions."),
-            "dimensions": dimensions
+            "overall_score":     0.0,
+            "domain_scores":     {},
+            "raw_notes_summary": "",
+            "dimensions":        [],
+            "error":             str(exc),
         }
 
-    except Exception as e:
-        logger.error(f"❌ AI ERROR: {str(e)}")
-        # ব্যাকআপ রেসপন্স
-        score = float(observation_data.get("overall_performance_score", 3.0))
-        rating = "Distinguished" if score >= 3.5 else "Accomplished"
-        
+
+def rewrite_feedback(
+    observation_data: dict,
+    original_result_dict: dict,
+    override_ratings: dict,
+) -> dict:
+    try:
+        from app.components.generator import (
+            ObservationData,
+            CoachingResult,
+            DimensionResult,
+            DIMENSIONS,
+            RATING_NUMERIC,
+            DOMAIN_DIMENSION_MAP,
+            rewrite_coaching_result,
+        )
+
+        # Rewrite এ সবসময় সব domain evaluate করতে হবে
+        all_domains = list(DOMAIN_DIMENSION_MAP.keys())
+
+        obs = ObservationData(
+            teacher_name      = observation_data.get("teacher_name", ""),
+            subject           = observation_data.get("subject", ""),
+            grade_level       = observation_data.get("grade_level", ""),
+            date              = str(observation_data.get("observation_date", "")),
+            time              = str(observation_data.get("observation_time", "")),
+            observation_notes = observation_data.get("raw_notes", ""),
+            selected_domains  = all_domains,
+        )
+
+        result_dict = original_result_dict if isinstance(original_result_dict, dict) else {}
+
+        # DB থেকে আসা previous result rebuild করা
+        prev_result = CoachingResult(
+            teacher_name      = obs.teacher_name,
+            date              = obs.date,
+            raw_notes_summary = result_dict.get("raw_notes_summary", ""),
+        )
+
+        for dim in result_dict.get("dimensions", []):
+            dim_id      = dim.get("dimension_id", "")
+            ai_rating   = dim.get("ai_rating", dim.get("rating", "Not Enough Evidence"))
+            user_rating = dim.get("user_rating", ai_rating)
+            look_fors   = dim.get("look_fors", [])
+            if isinstance(look_fors, str):
+                look_fors = [look_fors]
+
+            prev_result.dimensions.append(
+                DimensionResult(
+                    dimension_id    = dim_id,
+                    dimension_name  = DIMENSIONS.get(dim_id, ""),
+                    ai_rating       = ai_rating,
+                    user_rating     = user_rating,
+                    rating_numeric  = RATING_NUMERIC.get(user_rating, 0.0),
+                    evidence        = dim.get("evidence", ""),
+                    why_this_rating = dim.get("why_this_rating", ""),
+                    glow            = dim.get("glow", ""),
+                    grow            = dim.get("grow", ""),
+                    action_step     = dim.get("action_step", ""),
+                    look_fors       = look_fors,
+                )
+            )
+
+        new_result = rewrite_coaching_result(
+            result         = prev_result,
+            data           = obs,
+            manual_ratings = override_ratings if isinstance(override_ratings, dict) else {},
+        )
+
+        return _result_to_dict(new_result)
+
+    except Exception as exc:
+        logger.error("AI rewrite error: %s", exc, exc_info=True)
         return {
-            "glow": f"Based on T-TESS descriptors, your {rating} lesson showed strong clarity.",
-            "grow": "Focus on Dimension 3.1 to improve individual student pacing.",
-            "raw_notes_summary": "Summary based on raw notes provided.",
-            "dimensions": [],
-            "error_info": str(e) # ডিবাগিং এর জন্য
+            "overall_score":     0.0,
+            "domain_scores":     {},
+            "raw_notes_summary": "",
+            "dimensions":        [],
+            "error":             str(exc),
         }
+
+
+def _result_to_dict(result) -> dict:
+    dimensions = []
+    for d in result.dimensions:
+        look_fors = d.look_fors
+        if isinstance(look_fors, str):
+            look_fors = [look_fors]
+        dimensions.append({
+            "dimension_id":    d.dimension_id,
+            "dimension_name":  d.dimension_name,
+            "ai_rating":       d.ai_rating,
+            "user_rating":     d.user_rating,
+            "rating_numeric":  d.rating_numeric,
+            "evidence":        d.evidence,
+            "why_this_rating": d.why_this_rating,
+            "glow":            d.glow,
+            "grow":            d.grow,
+            "action_step":     d.action_step,
+            "look_fors":       look_fors,
+        })
+
+    return {
+        "overall_score":     result.overall_score,
+        "domain_scores":     result.domain_scores,
+        "raw_notes_summary": result.raw_notes_summary,
+        "dimensions":        dimensions,
+    }
+
+
+# Legacy wrappers
+class ObservationAIService:
+    @staticmethod
+    def get_ai_feedback(observation_data=None, **kwargs):
+        data = observation_data if isinstance(observation_data, dict) else {}
+        return generate_initial_feedback(data)
+
+
+def generate_feedback(observation_data: dict) -> dict:
+    return generate_initial_feedback(observation_data)

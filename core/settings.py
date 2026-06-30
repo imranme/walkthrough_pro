@@ -143,8 +143,8 @@ REST_FRAMEWORK = {
 # JWT CONFIG
 # ─────────────────────────────────────────────────────────────
 SIMPLE_JWT = {
-    'ACCESS_TOKEN_LIFETIME': timedelta(days=1),
-    'REFRESH_TOKEN_LIFETIME': timedelta(days=7),
+    'ACCESS_TOKEN_LIFETIME': timedelta(days=15),
+    'REFRESH_TOKEN_LIFETIME': timedelta(days=30),
     'ROTATE_REFRESH_TOKENS': True,
     'BLACKLIST_AFTER_ROTATION': True,
     'AUTH_HEADER_TYPES': ('Bearer',),
@@ -179,7 +179,7 @@ CORS_ALLOWED_ORIGINS = [
 CORS_ALLOW_HEADERS = list(default_headers) + [
     "ngrok-skip-browser-warning",
 ]
-
+ALLOWED_HOSTS = ["*"]
 # ─────────────────────────────────────────────────────────────
 # INTERNATIONALIZATION
 # ─────────────────────────────────────────────────────────────
@@ -220,9 +220,15 @@ EMAIL_HOST_PASSWORD = env('EMAIL_HOST_PASSWORD')
 # ─────────────────────────────────────────────────────────────
 STRIPE_SECRET_KEY = env('STRIPE_SECRET_KEY')
 STRIPE_PRO_PRICE_ID = env('STRIPE_PRO_PRICE_ID')
+STRIPE_YEARLY_PRICE_ID = env('STRIPE_YEARLY_PRICE_ID')
 STRIPE_WEBHOOK_SECRET = env('STRIPE_WEBHOOK_SECRET')
 
 FRONTEND_URL = env('FRONTEND_URL')
+
+
+#"revenuecat"
+
+REVENUECAT_SECRET_KEY = env("REVENUECAT_SECRET_KEY", default="")
 
 # ─────────────────────────────────────────────────────────────
 # SECURITY SETTINGS
