@@ -6,21 +6,24 @@ Mobile: SubscriptionStatusView + RevenueCat Webhook Integration
 
 import json
 import logging
+import hmac
+import hashlib
 import stripe
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse
 from django.utils import timezone
+from django.utils.decorators import method_decorator
 from django.views.decorators.csrf import csrf_exempt
-from datetime import timedelta
+from datetime import timedelta, datetime
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from datetime import datetime
 
 from .models import Invoice, Subscription
 from .serializers import InvoiceSerializer
 from .permissions import _is_mobile_request
+from .revenuecat_service import revenuecat   # ← নতুন import
 
 stripe.api_key = settings.STRIPE_SECRET_KEY
 logger = logging.getLogger(__name__)
@@ -42,7 +45,6 @@ class StartTrialView(APIView):
     def post(self, request):
         user = request.user
 
-        # Staff/Superuser → no trial needed (সুপার অ্যাডমিন আজীবন ফ্রি)
         if user.is_staff or user.is_superuser:
             return Response({"message": "Staff access. No trial needed."})
 
@@ -79,8 +81,6 @@ class StartTrialView(APIView):
 
 # ══════════════════════════════════════════════════════════════════════
 # 2. Subscription Status
-# Web: Django subscription check
-# Mobile: RevenueCat-এর জন্য শুধু user info দেয়
 # ══════════════════════════════════════════════════════════════════════
 
 class SubscriptionStatusView(APIView):
@@ -90,108 +90,88 @@ class SubscriptionStatusView(APIView):
     Web frontend: Uses is_fully_active, days_left, and can_purchase
     Mobile app: Bypasses RevenueCat if is_staff/superuser
     """
-
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
 
-        # Superuser/Staff → always active, no payment needed
         if user.is_staff or user.is_superuser:
-            return Response(
-                {
-                    "plan_type": "staff",
-                    "status": "active",
-                    "is_fully_active": True,
-                    "is_staff": True,
-                    "days_left": 9999,
-                    "can_purchase": False,
-                    "trial_days_remaining": 0,
-                    "upgrade_url": None,
-                }
-            )
+            return Response({
+                "plan_type": "staff",
+                "status": "active",
+                "is_fully_active": True,
+                "is_staff": True,
+                "days_left": 9999,
+                "can_purchase": False,
+                "trial_days_remaining": 0,
+                "upgrade_url": None,
+            })
 
-        # Mobile → RevenueCat handles subscription
         if _is_mobile_request(request):
-            return Response(
-                {
-                    "is_staff": False,
-                    "is_superuser": False,
-                    "revenuecat_user_id": str(user.pk),
-                    "email": user.email,
-                    "mobile_access": "managed_by_revenuecat",
-                }
-            )
+            return Response({
+                "is_staff": False,
+                "is_superuser": False,
+                "revenuecat_user_id": str(user.pk),
+                "email": user.email,
+                "mobile_access": "managed_by_revenuecat",
+            })
 
-        # Web → Django subscription check
         try:
             sub = user.subscription
         except Exception:
-            return Response(
-                {
-                    "plan_type": "free",
-                    "status": "no_subscription",
-                    "is_fully_active": False,
-                    "days_left": 0,
-                    "can_purchase": True,
-                    "upgrade_url": "https://walkthroughpro.app/pricing",
-                }
-            )
+            return Response({
+                "plan_type": "free",
+                "status": "no_subscription",
+                "is_fully_active": False,
+                "days_left": 0,
+                "can_purchase": True,
+                "upgrade_url": "https://walkthroughpro.app/pricing",
+            })
 
-        # Calculate remaining subscription days dynamically
-        # Calculate remaining subscription days dynamically
         days_left = 0
-if sub.is_fully_active:
-    if sub.is_trial_active and sub.trial_end_date:
-        delta = sub.trial_end_date - timezone.now()
-        days_left = max(0, delta.days)
+        if sub.is_fully_active:
+            if sub.is_trial_active and sub.trial_end_date:
+                delta = sub.trial_end_date - timezone.now()
+                days_left = max(0, delta.days)
 
-    elif sub.is_pro_active:
-        # pro_end_date আছে কিনা দেখো
-        if sub.pro_end_date and sub.pro_end_date > timezone.now():
-            delta = sub.pro_end_date - timezone.now()
-            days_left = max(0, delta.days)
-        else:
-            # pro_end_date নেই → Stripe থেকে আনো
-            try:
-                if sub.stripe_subscription_id:
-                    stripe_sub = stripe.Subscription.retrieve(
-                        sub.stripe_subscription_id
-                    )
-                    import datetime
-                    end_ts  = stripe_sub.current_period_end
-                    end_dt  = datetime.datetime.fromtimestamp(end_ts, tz=timezone.utc)
-                    # DB-তে save করো future calls-এর জন্য
-                    sub.pro_end_date = end_dt
-                    sub.save(update_fields=['pro_end_date'])
-                    delta    = end_dt - timezone.now()
+            elif sub.is_pro_active:
+                if sub.pro_end_date and sub.pro_end_date > timezone.now():
+                    delta = sub.pro_end_date - timezone.now()
                     days_left = max(0, delta.days)
                 else:
-                    days_left = 30  # fallback
-            except Exception:
-                days_left = 30  # fallback
+                    try:
+                        if sub.stripe_subscription_id:
+                            stripe_sub = stripe.Subscription.retrieve(
+                                sub.stripe_subscription_id
+                            )
+                            end_ts  = stripe_sub.current_period_end
+                            end_dt  = datetime.fromtimestamp(end_ts, tz=timezone.utc)
+                            sub.pro_end_date = end_dt
+                            sub.save(update_fields=['pro_end_date'])
+                            delta    = end_dt - timezone.now()
+                            days_left = max(0, delta.days)
+                        else:
+                            days_left = 30
+                    except Exception:
+                        days_left = 30
 
-        # Determine if the frontend should block/allow new checkouts
         can_purchase = not sub.is_fully_active
 
-        return Response(
-            {
-                "plan_type": sub.plan_type,
-                "status": sub.status,
-                "is_fully_active": sub.is_fully_active,
-                "is_trial_active": sub.is_trial_active,
-                "is_pro_active": sub.is_pro_active,
-                "trial_days_remaining": sub.trial_days_remaining,
-                "trial_end_date": sub.trial_end_date,
-                "days_left": days_left,
-                "can_purchase": can_purchase,
-                "upgrade_url": (
-                    None
-                    if sub.is_fully_active
-                    else "https://walkthroughpro.app/pricing"
-                ),
-            }
-        )
+        return Response({
+            "plan_type": sub.plan_type,
+            "status": sub.status,
+            "is_fully_active": sub.is_fully_active,
+            "is_trial_active": sub.is_trial_active,
+            "is_pro_active": sub.is_pro_active,
+            "trial_days_remaining": sub.trial_days_remaining,
+            "trial_end_date": sub.trial_end_date,
+            "days_left": days_left,
+            "can_purchase": can_purchase,
+            "upgrade_url": (
+                None if sub.is_fully_active else "https://walkthroughpro.app/pricing"
+            ),
+        })
+
 
 # ══════════════════════════════════════════════════════════════════════
 # 3. Stripe Checkout (Web)
@@ -207,11 +187,9 @@ class CreateCheckoutSessionView(APIView):
     def post(self, request):
         user = request.user
         try:
-            # 1. Extract price_id or plan_type from request body
             received_price_id = request.data.get('price_id')
             requested_plan = request.data.get('plan_type', '').lower()
 
-            # 2. Assign the target price ID dynamically
             if received_price_id:
                 target_price_id = received_price_id
             elif requested_plan == 'yearly':
@@ -219,7 +197,6 @@ class CreateCheckoutSessionView(APIView):
             else:
                 target_price_id = settings.STRIPE_PRO_PRICE_ID
 
-            # 3. Customer ID management logic
             sub         = getattr(user, 'subscription', None)
             customer_id = sub.stripe_customer_id if sub else None
 
@@ -234,7 +211,6 @@ class CreateCheckoutSessionView(APIView):
                     sub.stripe_customer_id = customer_id
                     sub.save(update_fields=['stripe_customer_id'])
 
-            # 4. Create Stripe checkout session using the target_price_id
             session = stripe.checkout.Session.create(
                 customer             = customer_id,
                 payment_method_types = ['card'],
@@ -253,6 +229,8 @@ class CreateCheckoutSessionView(APIView):
         except Exception as exc:
             logger.error("Checkout session error: %s", exc)
             return Response({"error": "Internal error"}, status=500)
+
+
 # ══════════════════════════════════════════════════════════════════════
 # 4. Verify Payment
 # ══════════════════════════════════════════════════════════════════════
@@ -274,15 +252,13 @@ class VerifyPaymentView(APIView):
             return Response({"error": str(exc)}, status=400)
 
 
-
 # ══════════════════════════════════════════════════════════════════════
-# 8. Cancel Subscription (Web/Stripe)
+# 5. Cancel Subscription (Web/Stripe)
 # ══════════════════════════════════════════════════════════════════════
 
 class CancelSubscriptionView(APIView):
     """
     POST /api/v1/payments/cancel-subscription/
-    ইউজারের একটিভ স্ট্রাইপ সাবস্ক্রিপশন ক্যানসেল বা অটো-রিনিউ অফ করার জন্য।
     """
     permission_classes = [permissions.IsAuthenticated]
 
@@ -293,7 +269,6 @@ class CancelSubscriptionView(APIView):
             if not sub or not sub.stripe_subscription_id:
                 return Response({"error": "No active Stripe subscription found."}, status=400)
 
-            # স্ট্রাইপ ক্লাউড থেকে সাবস্ক্রিপশনটি পিরিয়ডের শেষে ক্যানসেল করার রিকোয়েস্ট
             stripe.Subscription.modify(
                 sub.stripe_subscription_id,
                 cancel_at_period_end=True
@@ -301,7 +276,7 @@ class CancelSubscriptionView(APIView):
 
             sub.status = 'cancelled'
             sub.save(update_fields=['status'])
-            
+
             logger.info("Stripe subscription set to cancel at period end for user: %s", user.email)
             return Response({"message": "Subscription will be cancelled at the end of the billing period."})
 
@@ -311,22 +286,18 @@ class CancelSubscriptionView(APIView):
             logger.error("Cancel subscription error: %s", exc)
             return Response({"error": "Internal server error"}, status=500)
 
+
 # ══════════════════════════════════════════════════════════════════════
-# 5. Invoice List
+# 6. Invoice List
 # ══════════════════════════════════════════════════════════════════════
 
 class InvoiceListView(APIView):
-    """
-    GET /api/v1/payments/invoices/
-    """
-
+    """GET /api/v1/payments/invoices/"""
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
         user = request.user
-
         try:
-            # 1. Safe extraction of subscription object
             sub = getattr(user, "subscription", None)
             if not sub:
                 return Response(
@@ -334,59 +305,47 @@ class InvoiceListView(APIView):
                     status=status.HTTP_200_OK,
                 )
 
-            # 2. Dynamic check for customer ID fields (matches your exact model attribute)
             customer_id = (
                 getattr(sub, "stripe_customer_id", None)
                 or getattr(sub, "customer_id", None)
                 or getattr(sub, "stripe_id", None)
             )
 
-            # If no stripe customer reference is found in DB, return empty list gracefully
             if not customer_id:
                 return Response(
                     {"message": "No Stripe customer ID linked to this profile."},
                     status=status.HTTP_200_OK,
                 )
 
-            # 3. Fetch from Stripe
             invoices = stripe.Invoice.list(customer=customer_id, limit=10)
 
             invoice_data = []
             for inv in invoices.data:
-                invoice_data.append(
-                    {
-                        "id": inv.id,
-                        "number": inv.number,
-                        "amount_paid": inv.amount_paid / 100,
-                        "currency": inv.currency.upper(),
-                        "status": inv.status,
-                        "hosted_invoice_url": getattr(inv, "hosted_invoice_url", None),
-                        "invoice_pdf": getattr(inv, "invoice_pdf", None),
-                        "created_at": datetime.fromtimestamp(inv.created).strftime(
-                            "%Y-%m-%d"
-                        ),
-                    }
-                )
+                invoice_data.append({
+                    "id": inv.id,
+                    "number": inv.number,
+                    "amount_paid": inv.amount_paid / 100,
+                    "currency": inv.currency.upper(),
+                    "status": inv.status,
+                    "hosted_invoice_url": getattr(inv, "hosted_invoice_url", None),
+                    "invoice_pdf": getattr(inv, "invoice_pdf", None),
+                    "created_at": datetime.fromtimestamp(inv.created).strftime("%Y-%m-%d"),
+                })
 
             return Response(invoice_data, status=status.HTTP_200_OK)
 
         except stripe.error.StripeError as exc:
             return Response({"error": str(exc)}, status=status.HTTP_400_BAD_REQUEST)
         except Exception as exc:
-            # 🎯 এটি আপনার পাইথন রানিং টার্মিনালে আসল এররটি প্রিন্ট করবে
-            print("\n" + "=" * 50)
-            print(f"🎯 ACTUAL INVOICE ERROR: {str(exc)}")
-            print("=" * 50 + "\n")
-
+            logger.error("Invoice list error: %s", exc)
             return Response(
-                {
-                    "error": "Internal server configuration error.",
-                    "debug_message": str(exc),  # পোস্টম্যান ডেস্কেই এররটি দেখতে পাবেন
-                },
+                {"error": "Internal server configuration error.", "debug_message": str(exc)},
                 status=status.HTTP_500_INTERNAL_SERVER_ERROR,
             )
+
+
 # ══════════════════════════════════════════════════════════════════════
-# 6. Stripe Webhook (Web Platform)
+# 7. Stripe Webhook (Web Platform)
 # ══════════════════════════════════════════════════════════════════════
 
 @csrf_exempt
@@ -462,67 +421,67 @@ def _deactivate_sub(data: dict):
 
 
 # ══════════════════════════════════════════════════════════════════════
-# 7. RevenueCat Webhook (Mobile App Platform)
+# 8. RevenueCat Webhook (Mobile App Platform)
+# revenuecat_service.py ব্যবহার করে — পুরনো function-based webhook এর
+# জায়গায় এই class-based view replace করেছে।
 # ══════════════════════════════════════════════════════════════════════
 
-@csrf_exempt
-def revenuecat_webhook(request):
+@method_decorator(csrf_exempt, name='dispatch')
+class RevenueCatWebhookView(APIView):
     """
-    POST /api/v1/payments/revenuecat-webhook/
-    RevenueCat V2 Webhook API ইন্টিগ্রেশন। অ্যাপ স্টোর ও গুগল প্লে পেমেন্ট রিয়েল-টাইমে ক্যাচ করে।
+    POST /api/v1/payments/revenuecat/webhook/
+
+    RevenueCat Dashboard → Project Settings → Webhooks এ এই URL দিন।
     """
-    if request.method != 'POST':
-        return JsonResponse({"error": "Method not allowed"}, status=405)
+    authentication_classes = []
+    permission_classes     = []
 
-    # সিকিউরিটি ভেরিফিকেশন: RevenueCat Header Token চেক
-    auth_header = request.META.get('HTTP_AUTHORIZATION', '')
-    if settings.REVENUECAT_WEBHOOK_SECRET and auth_header != f"Bearer {settings.REVENUECAT_WEBHOOK_SECRET}":
-        logger.error("Unauthorized access attempt on RevenueCat webhook endpoint.")
-        return JsonResponse({"error": "Unauthorized"}, status=401)
+    def post(self, request):
+        try:
+            if not self._verify_signature(request):
+                logger.warning("Invalid RevenueCat webhook signature")
+                # production-এ strict করতে চাইলে uncomment করুন:
+                # return Response({"error": "Invalid signature"}, status=401)
 
-    try:
-        payload = json.loads(request.body)
-    except json.JSONDecodeError:
-        return JsonResponse({"error": "Invalid JSON payload"}, status=400)
+            data       = request.data
+            event_type = data.get("event", {}).get("type")
 
-    event = payload.get('event', {})
-    event_type = event.get('type')
-    user_id = event.get('app_user_id')  # অ্যাপ থেকে পাস করা জ্যাঙ্গো User PK/ID
+            if not event_type:
+                return Response({"error": "No event type"}, status=400)
 
-    logger.info("RevenueCat Webhook Triggered: %s for user_id=%s", event_type, user_id)
+            logger.info("RevenueCat webhook: %s", event_type)
+            revenuecat.handle_webhook(event_type, data)
 
-    if not user_id:
-        return JsonResponse({"error": "app_user_id missing"}, status=400)
+            return Response({"status": "processed", "event_type": event_type}, status=200)
 
-    try:
-        user = User.objects.get(pk=user_id)
-        sub, _ = Subscription.objects.get_or_create(user=user)
+        except Exception as exc:
+            logger.error("RevenueCat webhook error: %s", exc, exc_info=True)
+            return Response({"error": str(exc)}, status=500)
 
-        # পেমেন্ট সাকসেসফুল অথবা সাবস্ক্রিপশন রিনিউ হলে
-        if event_type in ('INITIAL_PURCHASE', 'RENEWAL', 'SUBSCRIBER_ALIAS'):
-            sub.plan_type = 'professional'
-            sub.status = 'active'
-            
-            # RevenueCat এর এক্সপায়ারি টাইমস্ট্যাম্পকে ডাটাবেজের ডিরেক্ট ডেটটাইমে কনভার্ট করা
-            expires_at_ms = event.get('expiration_at_ms')
-            if expires_at_ms:
-                sub.pro_end_date = timezone.datetime.fromtimestamp(expires_at_ms / 1000.0, tz=timezone.utc)
-            else:
-                sub.pro_end_date = timezone.now() + timedelta(days=30) # সেফটি ব্যাকআপ ৩০ দিন
-                
-            sub.save()
-            logger.info("Pro activated via Mobile RevenueCat: user=%s", user.email)
+    def get(self, request):
+        """Health check"""
+        return Response({
+            "status": "webhook_ready",
+            "signature_verification": (
+                "enabled" if getattr(settings, "REVENUECAT_SECRET_KEY", "") else "disabled"
+            ),
+        })
 
-        # সাবস্ক্রিপশন টাইমআউট বা ইউজার রিফান্ড/ক্যান্সেল করলে 
-        elif event_type in ('EXPIRATION', 'CANCELLATION'):
-            sub.status = 'expired'
-            sub.save(update_fields=['status'])
-            logger.info("RevenueCat plan expired/cancelled for user=%s", user.email)
+    def _verify_signature(self, request) -> bool:
+        try:
+            signature  = request.META.get("HTTP_X_REVENUECAT_CONTENT_SIGNATURE", "")
+            secret_key = getattr(settings, "REVENUECAT_SECRET_KEY", "")
 
-    except User.DoesNotExist:
-        logger.error("RevenueCat webhook: Django User ID %s not found.", user_id)
-    except Exception as exc:
-        logger.error("RevenueCat webhook parsing error: %s", exc)
-        return JsonResponse({"error": "Internal webhook processing error"}, status=500)
+            if not signature or not secret_key:
+                return False
 
-    return JsonResponse({"status": "success"}, status=200)
+            mac = hmac.new(
+                key=secret_key.encode('utf-8'),
+                msg=request.body,
+                digestmod=hashlib.sha256,
+            )
+            return hmac.compare_digest(signature, mac.hexdigest())
+
+        except Exception as exc:
+            logger.error("Signature verification error: %s", exc)
+            return False

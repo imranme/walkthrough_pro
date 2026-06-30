@@ -54,6 +54,11 @@ class Subscription(models.Model):
     # --- Stripe Integration Fields ---
     stripe_customer_id = models.CharField(max_length=120, blank=True, null=True)
     stripe_subscription_id = models.CharField(max_length=120, blank=True, null=True)
+    
+    revenuecat_app_user_id = models.CharField(
+        max_length=120, blank=True, null=True,
+        help_text="RevenueCat app_user_id (= Django user.pk হিসেবে set করা)",
+    )
     pro_end_date = models.DateTimeField(
         null=True, 
         blank=True,

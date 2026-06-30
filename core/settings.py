@@ -225,6 +225,11 @@ STRIPE_WEBHOOK_SECRET = env('STRIPE_WEBHOOK_SECRET')
 
 FRONTEND_URL = env('FRONTEND_URL')
 
+
+#"revenuecat"
+
+REVENUECAT_SECRET_KEY = env("REVENUECAT_SECRET_KEY", default="")
+
 # ─────────────────────────────────────────────────────────────
 # SECURITY SETTINGS
 # ─────────────────────────────────────────────────────────────
