@@ -56,14 +56,25 @@ class RevenueCatService:
         return customer.get("app_user_id")
 
     def _get_user(self, app_user_id: str):
-        """
-        app_user_id = Django user.pk (string হিসেবে)।
-        App developer logIn(str(djangoUserPk)) করবে।
-        """
+        # ১. Django pk দিয়ে try (normal case)
         try:
             return User.objects.get(pk=app_user_id)
         except (User.DoesNotExist, ValueError):
-            return None
+            pass
+
+        # ২. Email দিয়ে try (fallback)
+        try:
+            return User.objects.get(email=app_user_id)
+        except User.DoesNotExist:
+            pass
+
+        # ৩. Anonymous ID — logIn() হয়নি
+        logger.error(
+            "RevenueCat: user not found for app_user_id='%s'. "
+            "App developer must call Purchases.logIn(djangoUserId) after login.",
+            app_user_id,
+        )
+        return None
 
     def handle_webhook(self, event_type: str, data: Dict[str, Any]) -> None:
         try:
